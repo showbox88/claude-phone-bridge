@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="theme-color" content="#1a1a1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Claude">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+  <title>Claude Bridge</title>
+</head>
+<body>
+  <header class="app-bar">
+    <div class="title">
+      <span class="dot" id="conn-dot" title="disconnected"></span>
+      <span>Claude</span>
+      <span class="cwd" id="cwd-label"></span>
+    </div>
+    <div class="actions">
+      <button id="notif-btn" class="icon-btn" title="启用推送通知">🔔</button>
+      <button id="menu-btn" class="icon-btn" title="菜单">⚙</button>
+    </div>
+  </header>
+
+  <div id="menu" class="menu hidden">
+    <button data-cmd="new">新会话</button>
+    <button data-cmd="cancel">取消当前轮</button>
+    <button data-cmd="cwd-prompt">切换工作目录…</button>
+  </div>
+
+  <main id="messages" class="messages"></main>
+
+  <footer class="composer">
+    <textarea
+      id="input"
+      placeholder="发消息给 Claude…  (回车发送，Shift+回车换行)"
+      rows="1"
+      autocomplete="off"
+      autocorrect="off"
+      autocapitalize="off"
+      spellcheck="false"
+    ></textarea>
+    <button id="send-btn" class="send-btn">发送</button>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

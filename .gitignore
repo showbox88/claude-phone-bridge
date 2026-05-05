@@ -1,0 +1,12 @@
+.env
+push_subs.json
+*.pem
+.claude/
+__pycache__/
+*.pyc
+*.log
+.venv/
+venv/
+.idea/
+.vscode/
+.DS_Store
