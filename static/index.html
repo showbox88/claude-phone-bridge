@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
-  <meta name="theme-color" content="#1a1a1a">
+  <meta name="theme-color" content="#0f0f0f">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Claude">
@@ -14,39 +14,123 @@
   <title>Claude Bridge</title>
 </head>
 <body>
-  <header class="app-bar">
-    <div class="title">
-      <span class="dot" id="conn-dot" title="disconnected"></span>
-      <span>Claude</span>
-      <span class="cwd" id="cwd-label"></span>
+  <!-- source picker (full-screen, shown until a source is selected) -->
+  <div id="source-picker" class="source-picker hidden">
+    <div class="sp-inner">
+      <div class="sp-head">
+        <div class="sp-logo">✻</div>
+        <h1>Phone Bridge</h1>
+        <p class="sp-sub">选择要连接的电脑</p>
+      </div>
+      <div id="sp-list" class="sp-list"></div>
+      <div class="sp-actions">
+        <button id="sp-add-btn" class="sp-add" type="button">＋ 添加电脑</button>
+      </div>
     </div>
-    <div class="actions">
-      <button id="notif-btn" class="icon-btn" title="启用推送通知">🔔</button>
-      <button id="menu-btn" class="icon-btn" title="菜单">⚙</button>
+    <div id="sp-form" class="sp-form hidden">
+      <div class="sp-form-inner">
+        <h3 id="sp-form-title">添加电脑</h3>
+        <label>名称<input id="sp-name" type="text" placeholder="家里电脑" maxlength="40"></label>
+        <label>地址<input id="sp-url" type="url" inputmode="url" placeholder="https://home-pc.tail-xxx.ts.net"></label>
+        <div class="sp-form-foot">
+          <button id="sp-cancel" type="button">取消</button>
+          <button id="sp-save" type="button" class="primary">保存</button>
+        </div>
+      </div>
     </div>
-  </header>
-
-  <div id="menu" class="menu hidden">
-    <button data-cmd="new">新会话</button>
-    <button data-cmd="cancel">取消当前轮</button>
-    <button data-cmd="cwd-prompt">切换工作目录…</button>
   </div>
 
-  <main id="messages" class="messages"></main>
+  <!-- session drawer (slide from left) -->
+  <aside id="drawer" class="drawer hidden" aria-hidden="true">
+    <div class="drawer-head">
+      <span class="drawer-title">会话</span>
+      <button id="drawer-close" class="icon-btn" type="button" aria-label="关闭">✕</button>
+    </div>
+    <div class="menu-segment" id="workspace-toggle" role="tablist">
+      <button class="seg-btn" data-workspace="chat" type="button">
+        <span class="seg-icon">💬</span><span>Chat</span>
+      </button>
+      <button class="seg-btn" data-workspace="code" type="button">
+        <span class="seg-icon">&lt;/&gt;</span><span>Code</span>
+      </button>
+    </div>
+    <button id="new-session-btn" class="new-session" type="button">
+      <span class="plus">＋</span><span>新建会话</span>
+    </button>
+    <div id="session-list" class="session-list"></div>
+  </aside>
+  <div id="drawer-mask" class="drawer-mask hidden"></div>
 
-  <footer class="composer">
-    <textarea
-      id="input"
-      placeholder="发消息给 Claude…  (回车发送，Shift+回车换行)"
-      rows="1"
-      autocomplete="off"
-      autocorrect="off"
-      autocapitalize="off"
-      spellcheck="false"
-    ></textarea>
-    <button id="send-btn" class="send-btn">发送</button>
-  </footer>
+  <div class="main-pane">
+    <!-- top bar -->
+    <header class="app-bar">
+      <button id="drawer-btn" class="icon-btn" type="button" aria-label="会话">☰</button>
+      <div class="title">
+        <span class="dot" id="conn-dot" title="disconnected"></span>
+        <div class="title-stack">
+          <button id="source-btn" class="source-btn" type="button" title="切换电脑">
+            <span id="source-name">—</span>
+            <span class="caret">▾</span>
+          </button>
+          <span id="session-title" class="session-title-sub">Claude</span>
+        </div>
+        <span class="cwd" id="cwd-label"></span>
+      </div>
+      <div class="actions">
+        <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知">🔔</button>
+        <button id="menu-btn" class="icon-btn" type="button" title="菜单">⋯</button>
+      </div>
+    </header>
 
+    <div id="menu" class="menu hidden">
+      <button data-cmd="rename">重命名当前</button>
+      <button data-cmd="cwd-prompt">切换工作目录…</button>
+      <button data-cmd="usage">📊 查看使用量</button>
+    </div>
+
+    <!-- model picker dropdown (positioned below the model button) -->
+    <div id="model-menu" class="menu hidden"></div>
+
+    <main id="messages" class="messages">
+      <div class="messages-inner">
+        <div id="empty-state" class="empty-state">
+          <div class="logo">✻</div>
+          <div class="hint">开始和 Claude 对话<br><small>＋ 添加图片，或选择电脑端文件路径</small></div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="composer">
+      <div class="composer-inner">
+        <div id="attach-bar" class="attach-bar hidden"></div>
+        <div class="composer-row">
+          <button id="attach-btn" class="icon-btn pill" title="添加图片或 PDF" type="button">＋</button>
+          <button id="camera-btn" class="icon-btn pill mobile-only" title="拍照" type="button">📷</button>
+          <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button">📎</button>
+          <input id="file-input" type="file"
+                 accept="image/*,application/pdf,text/*,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.tsx,.jsx,.html,.css,.scss,.cpp,.cc,.c,.h,.hpp,.java,.kt,.go,.rs,.rb,.php,.sh,.sql,.xlsx,.xls"
+                 multiple hidden>
+          <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
+          <textarea
+            id="input"
+            placeholder="发消息给 Claude…"
+            rows="1"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="off"
+            spellcheck="false"
+          ></textarea>
+          <button id="send-btn" class="send-btn" type="button" aria-label="发送">↑</button>
+        </div>
+        <div class="composer-bottom">
+          <span id="workspace-indicator" class="workspace-indicator">Code</span>
+          <button id="model-btn" class="model-pill" type="button">默认 <span class="caret">▾</span></button>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="/static/marked.min.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>
