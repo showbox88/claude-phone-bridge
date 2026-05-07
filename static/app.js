@@ -1054,6 +1054,7 @@
       if (pick === 'camera') cameraInput.click();
       else if (pick === 'album') albumInput.click();
       else if (pick === 'file') fileInput.click();
+      else if (pick === 'clipboard') pasteFromClipboard();
     });
     document.addEventListener('click', (e) => {
       if (attachMenu.classList.contains('hidden')) return;
@@ -1061,6 +1062,41 @@
         attachMenu.classList.add('hidden');
       }
     });
+  }
+
+  // Read image(s) directly from the system clipboard. iOS Safari (≥13.4) and
+  // Android Chrome both support navigator.clipboard.read(); on iOS the first
+  // call also surfaces the native "Paste" permission sheet.
+  async function pasteFromClipboard() {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      sysMsg('当前浏览器不支持读取剪贴板，长按输入框粘贴试试');
+      return;
+    }
+    let items;
+    try {
+      items = await navigator.clipboard.read();
+    } catch (e) {
+      // User dismissed the iOS paste sheet, or clipboard access denied.
+      if (e && e.name !== 'NotAllowedError' && e.name !== 'AbortError') {
+        sysMsg('读取剪贴板失败: ' + (e.message || e.name));
+      }
+      return;
+    }
+    const files = [];
+    for (const item of items) {
+      const imgType = item.types.find((t) => t.startsWith('image/'));
+      if (!imgType) continue;
+      try {
+        const blob = await item.getType(imgType);
+        const ext = (imgType.split('/')[1] || 'png').split('+')[0];
+        files.push(new File([blob], `screenshot-${Date.now()}.${ext}`, { type: imgType }));
+      } catch (_) { /* skip this item */ }
+    }
+    if (!files.length) {
+      sysMsg('剪贴板里没有图片');
+      return;
+    }
+    await uploadFiles(files);
   }
 
   const handleUploadInput = async (e) => {
