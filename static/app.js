@@ -423,11 +423,32 @@
     }
   }
 
+  // Track whether the user has scrolled away from the bottom. Once true we
+  // stop auto-scrolling for streamed chunks until they come back near bottom
+  // or a forced scroll happens (turn_done, new user message).
+  let stickToBottom = true;
+  messagesScroll.addEventListener('scroll', () => {
+    const sc = messagesScroll;
+    stickToBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
+  }, { passive: true });
+
   function scrollToBottom(force) {
     const sc = messagesScroll;
-    const nearBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
-    if (force || nearBottom) sc.scrollTop = sc.scrollHeight;
+    if (!force && !stickToBottom) return;
+    // Run after layout (rAF) and again on the next frame to catch late
+    // re-flow from images, fonts, code-block highlighting, etc.
+    requestAnimationFrame(() => {
+      sc.scrollTop = sc.scrollHeight;
+      requestAnimationFrame(() => { sc.scrollTop = sc.scrollHeight; });
+    });
+    if (force) stickToBottom = true;
   }
+
+  // When images inside messages finish loading they grow the content; if the
+  // user is still pinned to the bottom, follow.
+  messagesScroll.addEventListener('load', (e) => {
+    if (e.target && e.target.tagName === 'IMG') scrollToBottom(false);
+  }, true);
 
   // ---------- history rendering ----------
   function clearMessages() {
@@ -652,6 +673,7 @@
       case 'turn_done':
         currentAssistantBubble = null; closeToolGroup();
         setResponding(false);
+        scrollToBottom(true);  // ensure the tail of the reply is fully visible
         loadSessionList();  // refresh title (auto-named) and updated_at
         break;
       case 'pong':
