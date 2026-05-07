@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=5">
+  <link rel="stylesheet" href="/static/style.css?v=6">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -77,6 +77,8 @@
         <span class="cwd" id="cwd-label"></span>
       </div>
       <div class="actions">
+        <span id="workspace-indicator" class="workspace-indicator">Code</span>
+        <button id="model-btn" class="model-pill" type="button">默认 <span class="caret">▾</span></button>
         <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知">🔔</button>
         <button id="menu-btn" class="icon-btn" type="button" title="菜单">⋯</button>
       </div>
@@ -129,15 +131,11 @@
           ></textarea>
           <button id="send-btn" class="send-btn" type="button" aria-label="发送">↑</button>
         </div>
-        <div class="composer-bottom">
-          <span id="workspace-indicator" class="workspace-indicator">Code</span>
-          <button id="model-btn" class="model-pill" type="button">默认 <span class="caret">▾</span></button>
-        </div>
       </div>
     </footer>
   </div>
 
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=5"></script>
+  <script src="/static/app.js?v=6"></script>
 </body>
 </html>

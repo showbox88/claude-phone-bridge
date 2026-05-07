@@ -836,11 +836,11 @@
       return;
     }
     renderModelMenu();
-    // position above the model button
+    // Drop menu below the model button (button now lives in the top app-bar).
     const r = modelBtn.getBoundingClientRect();
     modelMenu.style.left = Math.max(8, r.right - 200) + 'px';
-    modelMenu.style.bottom = (window.innerHeight - r.top + 8) + 'px';
-    modelMenu.style.top = '';
+    modelMenu.style.top = (r.bottom + 6) + 'px';
+    modelMenu.style.bottom = '';
     modelMenu.classList.remove('hidden');
   });
   document.addEventListener('click', () => modelMenu.classList.add('hidden'));

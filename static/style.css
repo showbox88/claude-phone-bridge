@@ -764,24 +764,26 @@ button { font-family: inherit; }
 .send-btn.stopping:hover { background: var(--error); border-color: var(--error); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- composer bottom row (workspace indicator + model) ---------- */
-.composer-bottom {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 0 4px;
-}
+/* ---------- workspace indicator + model pill (now lives in the app-bar) ---------- */
 .workspace-indicator {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-3);
-  padding: 4px 10px;
+  padding: 3px 8px;
   border-radius: 999px;
   background: var(--bg-2);
   border: 1px solid var(--line);
+  white-space: nowrap;
 }
 .workspace-indicator.chat { color: #b39ddb; border-color: rgba(179,157,219,.3); }
 .workspace-indicator.code { color: var(--accent); border-color: rgba(204,120,92,.3); }
+.app-bar .actions { gap: 6px; align-items: center; }
+.app-bar .model-pill { padding: 4px 8px; font-size: 12px; }
+@media (max-width: 480px) {
+  /* Tight phones: hide the static indicator (mode is also visible elsewhere)
+     and shrink the model pill so the title still gets room. */
+  .app-bar .workspace-indicator { display: none; }
+  .app-bar .model-pill { padding: 3px 6px; font-size: 11px; }
+}
 
 /* in chat mode, hide cwd-related controls (PC file picker, cwd label) */
 body.mode-chat #file-pick-btn,
