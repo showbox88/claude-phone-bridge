@@ -930,14 +930,24 @@ async def handle_cmd(msg: dict) -> None:
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+_NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+
 @app.get("/")
 async def index():
-    return FileResponse(STATIC_DIR / "index.html")
+    # Never let the browser cache index.html — it's the only file that pins
+    # the version string for /static/app.js & style.css. If it's stale, the
+    # phone keeps loading old JS forever.
+    return FileResponse(STATIC_DIR / "index.html", headers=_NO_CACHE)
 
 
 @app.get("/sw.js")
 async def service_worker():
-    return FileResponse(STATIC_DIR / "sw.js", media_type="application/javascript")
+    return FileResponse(
+        STATIC_DIR / "sw.js",
+        media_type="application/javascript",
+        headers=_NO_CACHE,
+    )
 
 
 @app.get("/manifest.json")

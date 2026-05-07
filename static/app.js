@@ -400,8 +400,8 @@
       </div>
       <pre>${escapeHtml(inputJson)}</pre>
       <div class="perm-actions">
-        <button class="allow">允许</button>
-        <button class="deny">拒绝</button>
+        <button type="button" class="allow">允许</button>
+        <button type="button" class="deny">拒绝</button>
       </div>
     `;
     el.querySelector('.allow').addEventListener('click', () => respondPerm(id, 'allow'));
