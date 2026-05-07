@@ -147,6 +147,28 @@
   // ---------- rendering ----------
   let currentAssistantBubble = null;
   let currentToolGroup = null; // wraps consecutive tool_use/result into one collapsible block
+  let typingEl = null;         // "Claude is working" three-dot indicator
+
+  function showTyping() {
+    if (typingEl && typingEl.parentNode === messages) {
+      messages.appendChild(typingEl); // keep it last
+      return;
+    }
+    hideEmptyState();
+    typingEl = document.createElement('div');
+    typingEl.className = 'typing';
+    typingEl.setAttribute('aria-label', 'Claude 正在工作');
+    typingEl.innerHTML = '<span></span><span></span><span></span>';
+    messages.appendChild(typingEl);
+    scrollToBottom(false);
+  }
+  function hideTyping() {
+    if (typingEl && typingEl.parentNode) typingEl.parentNode.removeChild(typingEl);
+    typingEl = null;
+  }
+  function bumpTyping() {
+    if (typingEl && messages.lastElementChild !== typingEl) messages.appendChild(typingEl);
+  }
 
   function ensureToolGroup() {
     if (currentToolGroup) return currentToolGroup;
@@ -162,6 +184,7 @@
     `;
     messages.appendChild(wrap);
     currentToolGroup = wrap;
+    bumpTyping();
     return wrap;
   }
 
@@ -310,6 +333,7 @@
       el.appendChild(t);
     }
     messages.appendChild(el);
+    bumpTyping();
     scrollToBottom(true);
   }
 
@@ -321,6 +345,7 @@
       currentAssistantBubble.className = 'msg assistant';
       currentAssistantBuffer = '';
       messages.appendChild(currentAssistantBubble);
+      bumpTyping();
     }
     currentAssistantBuffer += text;
     currentAssistantBubble.innerHTML = renderMarkdown(currentAssistantBuffer);
@@ -374,6 +399,7 @@
     el.className = 'msg system';
     el.textContent = text;
     messages.appendChild(el);
+    bumpTyping();
     scrollToBottom(false);
   }
   const sysMsg = appendSystem;
@@ -384,6 +410,7 @@
     el.className = 'msg error';
     el.textContent = text;
     messages.appendChild(el);
+    bumpTyping();
     scrollToBottom(true);
   }
 
@@ -400,13 +427,14 @@
       </div>
       <pre>${escapeHtml(inputJson)}</pre>
       <div class="perm-actions">
-        <button type="button" class="allow">允许</button>
         <button type="button" class="deny">拒绝</button>
+        <button type="button" class="allow">允许</button>
       </div>
     `;
     el.querySelector('.allow').addEventListener('click', () => respondPerm(id, 'allow'));
     el.querySelector('.deny').addEventListener('click', () => respondPerm(id, 'deny'));
     messages.appendChild(el);
+    bumpTyping();
     pendingPerms.set(id, el);
     scrollToBottom(true);
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
@@ -455,6 +483,7 @@
     messages.innerHTML = '';
     if (emptyState) messages.appendChild(emptyState);
     currentAssistantBubble = null; closeToolGroup();
+    typingEl = null;  // wiped along with messages.innerHTML
     pendingPerms.clear();
   }
 
@@ -472,7 +501,7 @@
           appendAssistantText(c.text || '');
           break;
         case 'tool_use':
-          currentAssistantBubble = null; closeToolGroup();
+          currentAssistantBubble = null;
           appendToolUse(c.tool, c.input);
           break;
         case 'tool_result':
@@ -660,7 +689,7 @@
         appendAssistantText(msg.text || '');
         break;
       case 'tool_use':
-        currentAssistantBubble = null; closeToolGroup();
+        currentAssistantBubble = null;
         appendToolUse(msg.tool, msg.input);
         break;
       case 'tool_result':
@@ -695,6 +724,7 @@
     sendBtn.textContent = isResponding ? '■' : '↑';
     sendBtn.setAttribute('aria-label', isResponding ? '停止' : '发送');
     sendBtn.title = isResponding ? '停止当前回复' : '发送';
+    if (isResponding) showTyping(); else hideTyping();
   }
 
   function sendCurrent() {
