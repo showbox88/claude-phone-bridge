@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=15">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -18,13 +18,13 @@
   <div id="source-picker" class="source-picker hidden">
     <div class="sp-inner">
       <div class="sp-head">
-        <div class="sp-logo">✻</div>
+        <div class="sp-logo" data-icon="sparkle" data-icon-size="56"></div>
         <h1>Phone Bridge</h1>
         <p class="sp-sub">选择要连接的电脑</p>
       </div>
       <div id="sp-list" class="sp-list"></div>
       <div class="sp-actions">
-        <button id="sp-add-btn" class="sp-add" type="button">＋ 添加电脑</button>
+        <button id="sp-add-btn" class="sp-add" type="button"><span class="ic" data-icon="plus" data-icon-size="18"></span><span>添加电脑</span></button>
       </div>
     </div>
     <div id="sp-form" class="sp-form hidden">
@@ -44,18 +44,18 @@
   <aside id="drawer" class="drawer hidden" aria-hidden="true">
     <div class="drawer-head">
       <span class="drawer-title">会话</span>
-      <button id="drawer-close" class="icon-btn" type="button" aria-label="关闭">✕</button>
+      <button id="drawer-close" class="icon-btn" type="button" aria-label="关闭" data-icon="close"></button>
     </div>
     <div class="menu-segment" id="workspace-toggle" role="tablist">
       <button class="seg-btn" data-workspace="chat" type="button">
-        <span class="seg-icon">💬</span><span>Chat</span>
+        <span class="seg-icon" data-icon="chat" data-icon-size="16"></span><span>Chat</span>
       </button>
       <button class="seg-btn" data-workspace="code" type="button">
-        <span class="seg-icon">&lt;/&gt;</span><span>Code</span>
+        <span class="seg-icon" data-icon="code" data-icon-size="16"></span><span>Code</span>
       </button>
     </div>
     <button id="new-session-btn" class="new-session" type="button">
-      <span class="plus">＋</span><span>新建会话</span>
+      <span class="plus" data-icon="plus" data-icon-size="16"></span><span>新建会话</span>
     </button>
     <div id="session-list" class="session-list"></div>
   </aside>
@@ -64,13 +64,13 @@
   <div class="main-pane">
     <!-- top bar -->
     <header class="app-bar">
-      <button id="drawer-btn" class="icon-btn" type="button" aria-label="会话">☰</button>
+      <button id="drawer-btn" class="icon-btn" type="button" aria-label="会话" data-icon="menu"></button>
       <div class="title">
         <span class="dot" id="conn-dot" title="disconnected"></span>
         <div class="title-stack">
           <button id="source-btn" class="source-btn" type="button" title="切换电脑">
             <span id="source-name">—</span>
-            <span class="caret">▾</span>
+            <span class="caret" data-icon="caret" data-icon-size="12"></span>
           </button>
           <span id="session-title" class="session-title-sub">Claude</span>
         </div>
@@ -78,16 +78,16 @@
       </div>
       <div class="actions">
         <span id="workspace-indicator" class="workspace-indicator">Code</span>
-        <button id="model-btn" class="model-pill" type="button">默认 <span class="caret">▾</span></button>
-        <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知">🔔</button>
-        <button id="menu-btn" class="icon-btn" type="button" title="菜单">⋯</button>
+        <button id="model-btn" class="model-pill" type="button"><span id="model-label">默认</span><span class="caret" data-icon="caret" data-icon-size="12"></span></button>
+        <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知" data-icon="bell"></button>
+        <button id="menu-btn" class="icon-btn" type="button" title="菜单" data-icon="more"></button>
       </div>
     </header>
 
     <div id="menu" class="menu hidden">
-      <button data-cmd="rename">重命名当前</button>
-      <button data-cmd="cwd-prompt">切换工作目录…</button>
-      <button data-cmd="usage">📊 查看使用量</button>
+      <button data-cmd="rename"><span class="ic" data-icon="edit" data-icon-size="16"></span>重命名当前</button>
+      <button data-cmd="cwd-prompt"><span class="ic" data-icon="folder" data-icon-size="16"></span>切换工作目录</button>
+      <button data-cmd="usage"><span class="ic" data-icon="chart" data-icon-size="16"></span>查看使用量</button>
     </div>
 
     <!-- model picker dropdown (positioned below the model button) -->
@@ -96,8 +96,8 @@
     <main id="messages" class="messages">
       <div class="messages-inner">
         <div id="empty-state" class="empty-state">
-          <div class="logo">✻</div>
-          <div class="hint">开始和 Claude 对话<br><small>＋ 添加图片，或选择电脑端文件路径</small></div>
+          <div class="logo" data-icon="sparkle" data-icon-size="56"></div>
+          <div class="hint">开始和 Claude 对话<br><small>添加图片，或选择电脑端文件</small></div>
         </div>
       </div>
     </main>
@@ -106,15 +106,16 @@
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
         <div class="composer-row">
-          <button id="paste-btn" class="icon-btn pill" title="粘贴剪贴板截图" type="button">📋</button>
           <div class="attach-wrap">
-            <button id="attach-btn" class="icon-btn pill" title="添加附件" type="button">＋</button>
+            <button id="attach-btn" class="icon-btn pill" title="添加附件" type="button" data-icon="plus"></button>
             <div id="attach-menu" class="menu attach-menu hidden">
-              <button type="button" data-pick="clipboard">📋 剪贴板</button>
-              <button type="button" data-pick="other">📄 其他选项</button>
+              <button type="button" data-pick="camera"><span class="ic" data-icon="camera" data-icon-size="16"></span>拍照</button>
+              <button type="button" data-pick="album"><span class="ic" data-icon="image" data-icon-size="16"></span>从相册选择</button>
+              <button type="button" data-pick="clipboard"><span class="ic" data-icon="clipboard" data-icon-size="16"></span>粘贴截图</button>
+              <button type="button" data-pick="file"><span class="ic" data-icon="file" data-icon-size="16"></span>选择文件</button>
             </div>
           </div>
-          <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button">📎</button>
+          <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button" data-icon="paperclip"></button>
           <input id="file-input" type="file"
                  accept="image/*,application/pdf,text/*,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.tsx,.jsx,.html,.css,.scss,.cpp,.cc,.c,.h,.hpp,.java,.kt,.go,.rs,.rb,.php,.sh,.sql,.xlsx,.xls"
                  multiple hidden>
@@ -123,20 +124,21 @@
           <input id="gallery-input" type="file" accept="image/*" hidden>
           <textarea
             id="input"
-            placeholder="发消息给 Claude…"
+            placeholder=""
             rows="1"
             autocomplete="off"
             autocorrect="off"
             autocapitalize="off"
             spellcheck="false"
           ></textarea>
-          <button id="send-btn" class="send-btn" type="button" aria-label="发送">↑</button>
+          <button id="send-btn" class="send-btn" type="button" aria-label="发送" data-icon="send"></button>
         </div>
       </div>
     </footer>
   </div>
 
+  <script src="/static/icons.js?v=15"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>

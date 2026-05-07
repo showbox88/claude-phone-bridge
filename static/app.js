@@ -231,9 +231,10 @@
     }
     const html = window.marked.parse(text);
     // Wrap each <pre> in a copy-able container so the existing copy-btn handler picks it up.
+    const copySvg = (window.icon && window.icon('copy', 14)) || '⧉';
     return html.replace(
       /<pre>(<code[\s\S]*?<\/code>)<\/pre>/g,
-      '<div class="code-block"><button class="copy-btn" type="button" title="复制">⧉</button><pre>$1</pre></div>'
+      `<div class="code-block"><button class="copy-btn" type="button" title="复制">${copySvg}</button><pre>$1</pre></div>`
     );
   }
 
@@ -267,12 +268,14 @@
     if (!pre) return;
     const text = pre.innerText;
     copyText(text).then((ok) => {
-      const old = btn.textContent;
-      btn.textContent = ok ? '✓' : '✗';
+      const old = btn.innerHTML;
+      const sz = parseInt(btn.querySelector('svg')?.getAttribute('width') || '14', 10);
+      const fb = (window.icon && window.icon(ok ? 'check' : 'x', sz)) || (ok ? '✓' : '✗');
+      btn.innerHTML = fb;
       btn.classList.toggle('ok', ok);
       btn.classList.toggle('fail', !ok);
       setTimeout(() => {
-        btn.textContent = old;
+        btn.innerHTML = old;
         btn.classList.remove('ok', 'fail');
       }, 1200);
     });
@@ -315,14 +318,13 @@
         dl.className = 'doc-list';
         for (const d of docList) {
           const ext = (d.url.match(/\.([a-z0-9]+)(\?|$)/i) || [, ''])[1].toLowerCase();
-          const icon = ext === 'pdf' ? '📕'
-                     : (ext === 'xlsx' || ext === 'xls') ? '📊'
-                     : '📄';
+          const ic = ext === 'pdf'                     ? (window.icon ? window.icon('file_pdf',   18) : '')
+                   : (ext === 'xlsx' || ext === 'xls') ? (window.icon ? window.icon('file_sheet', 18) : '')
+                   :                                     (window.icon ? window.icon('file',        18) : '');
           const a = document.createElement('a');
           a.href = d.url; a.target = '_blank'; a.rel = 'noopener';
           a.className = 'doc-link';
-          a.innerHTML = `<span class="doc-icon"></span><span class="doc-name"></span>`;
-          a.querySelector('.doc-icon').textContent = icon;
+          a.innerHTML = `<span class="doc-icon">${ic}</span><span class="doc-name"></span>`;
           a.querySelector('.doc-name').textContent = d.name || 'file';
           dl.appendChild(a);
         }
@@ -332,7 +334,8 @@
     if (Array.isArray(files) && files.length) {
       const fl = document.createElement('div');
       fl.className = 'file-list';
-      fl.textContent = '📎 ' + files.join('  ·  ');
+      const clipIcon = (window.icon && window.icon('paperclip', 13)) || '📎';
+      fl.innerHTML = `<span class="fl-ic">${clipIcon}</span><span>${escapeHtml(files.join('  ·  '))}</span>`;
       el.appendChild(fl);
     }
     if (text) {
@@ -368,11 +371,13 @@
     const el = document.createElement('details');
     el.className = 'tool-block';
     const inputJson = typeof inp === 'string' ? inp : JSON.stringify(inp, null, 2);
+    const playIcon = (window.icon && window.icon('play', 11)) || '▶';
+    const copyIcon = (window.icon && window.icon('copy', 13)) || '⧉';
     el.innerHTML = `
       <summary>
-        <span class="tool-icon">▶</span>
+        <span class="tool-icon">${playIcon}</span>
         <span class="tool-name">${escapeHtml(tool)}</span>
-        <button class="copy-btn inline" type="button" title="复制">⧉</button>
+        <button class="copy-btn inline" type="button" title="复制">${copyIcon}</button>
       </summary>
       <pre>${escapeHtml(inputJson)}</pre>
     `;
@@ -387,13 +392,14 @@
     const body = group.querySelector('.tg-body');
     const el = document.createElement('details');
     el.className = 'tool-block ' + (ok ? 'result' : 'error');
-    const icon = ok ? '✓' : '✗';
+    const icon = (window.icon && window.icon(ok ? 'check' : 'x', 13)) || (ok ? '✓' : '✗');
+    const copyIcon = (window.icon && window.icon('copy', 13)) || '⧉';
     const label = ok ? 'result' : 'error';
     el.innerHTML = `
       <summary>
         <span class="tool-icon">${icon}</span>
         <span class="tool-name">${label}</span>
-        <button class="copy-btn inline" type="button" title="复制">⧉</button>
+        <button class="copy-btn inline" type="button" title="复制">${copyIcon}</button>
       </summary>
       <pre>${escapeHtml(content || '')}</pre>
     `;
@@ -429,10 +435,13 @@
     el.className = 'perm-card';
     el.dataset.id = id;
     const inputJson = typeof inp === 'string' ? inp : JSON.stringify(inp, null, 2);
+    const toolIcon = (window.icon && window.icon('tool', 16)) || '';
+    const copyIcon = (window.icon && window.icon('copy', 14)) || '⧉';
     el.innerHTML = `
       <div class="perm-head">
-        🔧 Claude 想运行 <span class="tool">${escapeHtml(tool)}</span>
-        <button class="copy-btn inline" type="button" title="复制">⧉</button>
+        <span class="ph-icon">${toolIcon}</span>
+        <span>Claude 想运行 <span class="tool">${escapeHtml(tool)}</span></span>
+        <button class="copy-btn inline" type="button" title="复制">${copyIcon}</button>
       </div>
       <pre>${escapeHtml(inputJson)}</pre>
       <div class="perm-actions">
@@ -449,15 +458,29 @@
     if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
   }
 
+  function markPermResolved(id, decision) {
+    const el = pendingPerms.get(id);
+    if (!el || el.classList.contains('resolved')) return;
+    el.classList.add('resolved');
+    const head = el.querySelector('.perm-head');
+    if (head) {
+      const tag = document.createElement('span');
+      tag.className = 'perm-tag perm-tag-' + (decision || 'unknown');
+      tag.textContent = decision === 'allow'   ? '已允许'
+                      : decision === 'deny'    ? '已拒绝'
+                      : decision === 'timeout' ? '已超时'
+                      :                          '已处理';
+      head.appendChild(tag);
+    }
+    el.querySelectorAll('.perm-actions button').forEach((b) => { b.disabled = true; });
+    pendingPerms.delete(id);
+  }
+
   function respondPerm(id, decision) {
     if (!send({ type: 'permission_response', id, decision })) return;
-    const el = pendingPerms.get(id);
-    if (el) {
-      el.classList.add('resolved');
-      const head = el.querySelector('.perm-head');
-      head.innerHTML += ` · <span style="opacity:.7">${decision === 'allow' ? '已允许' : '已拒绝'}</span>`;
-      pendingPerms.delete(id);
-    }
+    // Local snappy feedback; the server's broadcast will reach back here too
+    // but markPermResolved is idempotent so it's a no-op the second time.
+    markPermResolved(id, decision);
   }
 
   // Track whether the user has scrolled away from the bottom. Once true we
@@ -534,32 +557,29 @@
     });
     const ind = document.getElementById('workspace-indicator');
     if (ind) {
-      ind.textContent = currentMode === 'chat' ? '💬 Chat' : '</> Code';
+      const ic = (window.icon && window.icon(currentMode === 'chat' ? 'chat' : 'code', 13)) || '';
+      ind.innerHTML = `<span class="wi-ic">${ic}</span><span>${currentMode === 'chat' ? 'Chat' : 'Code'}</span>`;
       ind.classList.toggle('chat', currentMode === 'chat');
       ind.classList.toggle('code', currentMode === 'code');
     }
     document.body.classList.toggle('mode-chat', currentMode === 'chat');
     document.body.classList.toggle('mode-code', currentMode === 'code');
-    if (input) {
-      input.placeholder = currentMode === 'chat'
-        ? '和 Claude 聊天…'
-        : '让 Claude 帮你写代码、改文件…';
-    }
+    if (input) input.placeholder = '';
     // Adapt empty-state hint
     const hint = document.querySelector('#empty-state .hint');
     if (hint) {
       hint.innerHTML = currentMode === 'chat'
         ? '和 Claude 聊天<br><small>支持发图片让我看，纯对话不操作文件</small>'
-        : '开始和 Claude 对话<br><small>＋ 添加图片，或选择电脑端文件路径</small>';
+        : '开始和 Claude 对话<br><small>添加图片，或选择电脑端文件</small>';
     }
   }
 
   function setModel(model) {
     currentModel = model || '';
-    const btn = document.getElementById('model-btn');
-    if (!btn) return;
+    const labelEl = document.getElementById('model-label');
+    if (!labelEl) return;
     const m = (META.models || []).find((x) => x.id === currentModel);
-    btn.firstChild.textContent = ((m && m.label) || '默认') + ' ';
+    labelEl.textContent = (m && m.label) || '默认';
   }
 
   // ---------- session list ----------
@@ -589,16 +609,18 @@
       const t = s.title || '(未命名)';
       const date = new Date((s.updated_at || s.created_at) * 1000);
       const meta = `${date.toLocaleString('zh-CN', { hour12: false })} · ${s.msg_count}条`;
-      const badge = mode === 'chat' ? '💬' : '&lt;/&gt;';
+      const badgeIcon = (window.icon && window.icon(mode === 'chat' ? 'chat' : 'code', 13)) || '';
+      const trashIcon = (window.icon && window.icon('trash', 16)) || '×';
       item.innerHTML = `
         <span class="si-badge"></span>
         <div class="si-main">
           <div class="si-title"></div>
           <div class="si-meta"></div>
         </div>
-        <button class="si-del" type="button" title="删除">🗑</button>
+        <button class="si-del" type="button" title="删除"></button>
       `;
-      item.querySelector('.si-badge').innerHTML = badge;
+      item.querySelector('.si-badge').innerHTML = badgeIcon;
+      item.querySelector('.si-del').innerHTML = trashIcon;
       item.querySelector('.si-title').textContent = t;
       item.querySelector('.si-meta').textContent = meta;
       item.addEventListener('click', () => {
@@ -717,6 +739,9 @@
         currentAssistantBubble = null; closeToolGroup();
         appendPermissionCard(msg.id, msg.tool, msg.input);
         break;
+      case 'permission_resolved':
+        markPermResolved(msg.id, msg.decision);
+        break;
       case 'turn_done':
         currentAssistantBubble = null; closeToolGroup();
         setResponding(false);
@@ -739,7 +764,11 @@
   function setResponding(flag) {
     isResponding = !!flag;
     sendBtn.classList.toggle('stopping', isResponding);
-    sendBtn.textContent = isResponding ? '■' : '↑';
+    if (window.icon) {
+      sendBtn.innerHTML = window.icon(isResponding ? 'stop' : 'send', 18);
+    } else {
+      sendBtn.textContent = isResponding ? '■' : '↑';
+    }
     sendBtn.setAttribute('aria-label', isResponding ? '停止' : '发送');
     sendBtn.title = isResponding ? '停止当前回复' : '发送';
     if (isResponding) showTyping(); else hideTyping();
@@ -994,19 +1023,19 @@
     }
     attachBar.classList.remove('hidden');
     attachBar.innerHTML = '';
+    const xIcon = (window.icon && window.icon('x', 14)) || '×';
     pendingAttachments.forEach((a, idx) => {
       const chip = document.createElement('div');
       const kind = a.kind || ((a.mime || '').startsWith('image/') ? 'image' : '');
       if (kind === 'image') {
         chip.className = 'attach-chip';
-        chip.innerHTML = `<img src="${a.url}" alt=""><button class="x" type="button" title="移除">×</button>`;
+        chip.innerHTML = `<img src="${a.url}" alt=""><button class="x" type="button" title="移除">${xIcon}</button>`;
       } else {
         chip.className = 'attach-chip doc';
-        const icon = kind === 'pdf' ? '📕'
-                   : kind === 'sheet' ? '📊'
-                   : '📄';
-        chip.innerHTML = `<span class="doc-icon"></span><span class="doc-name"></span><button class="x" type="button" title="移除">×</button>`;
-        chip.querySelector('.doc-icon').textContent = icon;
+        const ic = kind === 'pdf'   ? (window.icon ? window.icon('file_pdf',   18) : '📕')
+                 : kind === 'sheet' ? (window.icon ? window.icon('file_sheet', 18) : '📊')
+                 :                    (window.icon ? window.icon('file',        18) : '📄');
+        chip.innerHTML = `<span class="doc-icon">${ic}</span><span class="doc-name"></span><button class="x" type="button" title="移除">${xIcon}</button>`;
         chip.querySelector('.doc-name').textContent = a.name || 'file';
       }
       chip.querySelector('.x').addEventListener('click', () => {
@@ -1018,9 +1047,10 @@
     pendingFiles.forEach((f, idx) => {
       const chip = document.createElement('div');
       chip.className = 'attach-chip';
-      chip.style.cssText = 'width:auto; padding:6px 10px; font-size:12px; color:var(--text-2); display:flex; align-items:center; gap:6px;';
+      chip.style.cssText = 'width:auto; padding:6px 10px; font-size:12px; color:var(--text-2); display:inline-flex; align-items:center; gap:6px;';
       const name = f.split(/[\\/]/).pop();
-      chip.innerHTML = `<span>📎 ${escapeHtml(name)}</span><button class="x" type="button" style="position:static; background:transparent;" title="移除">×</button>`;
+      const clipIcon = (window.icon && window.icon('paperclip', 14)) || '📎';
+      chip.innerHTML = `<span class="doc-icon">${clipIcon}</span><span>${escapeHtml(name)}</span><button class="x" type="button" style="position:static; background:transparent;" title="移除">${xIcon}</button>`;
       chip.querySelector('.x').addEventListener('click', () => {
         pendingFiles.splice(idx, 1);
         renderAttachBar();
@@ -1426,7 +1456,11 @@
       const item = document.createElement('div');
       item.className = 'sp-item checking';
       item.dataset.id = s.id;
+      const monitorIcon = (window.icon && window.icon('monitor', 22)) || '';
+      const editIcon = (window.icon && window.icon('edit', 16)) || '✎';
+      const trashIcon = (window.icon && window.icon('trash', 16)) || '×';
       item.innerHTML = `
+        <span class="sp-mark">${monitorIcon}</span>
         <span class="sp-status"></span>
         <div class="sp-meta">
           <span class="sp-name"></span>
@@ -1434,8 +1468,8 @@
           <span class="sp-state">检测中…</span>
         </div>
         <div class="sp-actions-inline">
-          <button data-act="edit" title="编辑">✎</button>
-          <button data-act="del" title="删除">🗑</button>
+          <button data-act="edit" title="编辑">${editIcon}</button>
+          <button data-act="del" title="删除">${trashIcon}</button>
         </div>
       `;
       item.querySelector('.sp-name').textContent = s.name;

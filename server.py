@@ -205,6 +205,7 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
         decision = await asyncio.wait_for(fut, timeout=600)
     except asyncio.TimeoutError:
         await broadcast({"type": "system", "msg": f"{tool_name} timed out, denied"})
+        await broadcast({"type": "permission_resolved", "id": cb_id, "decision": "timeout"})
         return PermissionResultDeny(behavior="deny", message="user did not respond in time")
     finally:
         state.pending.pop(cb_id, None)
@@ -855,6 +856,13 @@ async def handle_ws_message(ws: WebSocket, msg: dict) -> None:
         fut = state.pending.get(cb_id) if cb_id else None
         if fut and not fut.done():
             fut.set_result(decision)
+            # Tell every connected client (other phone tab, desktop browser, etc.)
+            # so their permission cards flip to the resolved state in sync.
+            await broadcast({
+                "type": "permission_resolved",
+                "id": cb_id,
+                "decision": decision,
+            })
     elif t == "cmd":
         await handle_cmd(msg)
     elif t == "ping":
