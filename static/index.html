@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=7">
+  <link rel="stylesheet" href="/static/style.css?v=11">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -106,13 +106,12 @@
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
         <div class="composer-row">
+          <button id="paste-btn" class="icon-btn pill" title="粘贴剪贴板截图" type="button">📋</button>
           <div class="attach-wrap">
             <button id="attach-btn" class="icon-btn pill" title="添加附件" type="button">＋</button>
             <div id="attach-menu" class="menu attach-menu hidden">
-              <button type="button" data-pick="camera">📷 拍照</button>
-              <button type="button" data-pick="album">🖼️ 从相册选择</button>
-              <button type="button" data-pick="clipboard">📋 粘贴截图</button>
-              <button type="button" data-pick="file">📄 选择文件</button>
+              <button type="button" data-pick="clipboard">📋 剪贴板</button>
+              <button type="button" data-pick="other">📄 其他选项</button>
             </div>
           </div>
           <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button">📎</button>
@@ -121,6 +120,7 @@
                  multiple hidden>
           <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
           <input id="album-input" type="file" accept="image/*" multiple hidden>
+          <input id="gallery-input" type="file" accept="image/*" hidden>
           <textarea
             id="input"
             placeholder="发消息给 Claude…"
@@ -137,6 +137,6 @@
   </div>
 
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=11"></script>
 </body>
 </html>

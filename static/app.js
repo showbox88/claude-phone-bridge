@@ -15,9 +15,11 @@
   const menuBtn = $('menu-btn');
   const notifBtn = $('notif-btn');
   const attachBtn = $('attach-btn');
+  const pasteBtn = $('paste-btn');
   const cameraBtn = $('camera-btn');
   const attachMenu = $('attach-menu');
   const albumInput = $('album-input');
+  const galleryInput = $('gallery-input');
   const filePickBtn = $('file-pick-btn');
   const fileInput = $('file-input');
   const cameraInput = $('camera-input');
@@ -1039,10 +1041,52 @@
 
   const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 
+  // Track whether the most recent gesture on ➕ was an upward swipe.
+  // Tap → directly invoke the system file picker (Android shows its native
+  // "Choose an action" sheet, iOS shows photo/camera/files chooser).
+  // Swipe-up → open our small popover with [📋 剪贴板, 📄 其他选项], so the
+  // clipboard option is reachable even when system gestures interfere.
+  let attachSwipeOpened = false;
+  if (isTouch) {
+    let ts = null;
+    attachBtn.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) { ts = null; return; }
+      const t = e.touches[0];
+      ts = { x: t.clientX, y: t.clientY, time: Date.now(), swiped: false };
+    }, { passive: true });
+    attachBtn.addEventListener('touchmove', (e) => {
+      if (!ts) return;
+      const t = e.touches[0];
+      if (ts.y - t.clientY > 18 && Math.abs(t.clientX - ts.x) < 40) ts.swiped = true;
+    }, { passive: true });
+    attachBtn.addEventListener('touchend', (e) => {
+      if (!ts) return;
+      const dt = Date.now() - ts.time;
+      if (ts.swiped && dt < 800) {
+        e.preventDefault();          // suppress the synthetic click
+        attachSwipeOpened = true;
+        attachMenu.classList.remove('hidden');
+      }
+      ts = null;
+    });
+  }
+
+  if (pasteBtn) {
+    pasteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pasteFromClipboard();
+    });
+  }
+
   attachBtn.addEventListener('click', (e) => {
+    if (attachSwipeOpened) { attachSwipeOpened = false; return; }
     if (!isTouch) { fileInput.click(); return; }
     e.stopPropagation();
-    attachMenu.classList.toggle('hidden');
+    // Tap on touch: open the photo gallery directly (image/* only, no
+    // `multiple`). Single-image accept="image/*" inputs are more likely to
+    // route to Chrome's Android Photo Picker / system Gallery than the
+    // generic file manager.
+    (galleryInput || albumInput).click();
   });
 
   if (attachMenu) {
@@ -1051,10 +1095,12 @@
       if (!btn) return;
       attachMenu.classList.add('hidden');
       const pick = btn.dataset.pick;
-      if (pick === 'camera') cameraInput.click();
+      if (pick === 'clipboard') pasteFromClipboard();
+      else if (pick === 'other') fileInput.click();
+      // legacy picks kept for backward-compat with cached HTML
+      else if (pick === 'camera') cameraInput.click();
       else if (pick === 'album') albumInput.click();
       else if (pick === 'file') fileInput.click();
-      else if (pick === 'clipboard') pasteFromClipboard();
     });
     document.addEventListener('click', (e) => {
       if (attachMenu.classList.contains('hidden')) return;
@@ -1107,6 +1153,7 @@
   fileInput.addEventListener('change', handleUploadInput);
   if (cameraInput) cameraInput.addEventListener('change', handleUploadInput);
   if (albumInput) albumInput.addEventListener('change', handleUploadInput);
+  if (galleryInput) galleryInput.addEventListener('change', handleUploadInput);
 
   if (cameraBtn) cameraBtn.style.display = 'none';
 
