@@ -1,6 +1,8 @@
 .env
 push_subs.json
 *.pem
+*.crt
+*.key
 .claude/
 __pycache__/
 *.pyc

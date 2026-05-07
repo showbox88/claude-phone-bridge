@@ -131,10 +131,17 @@
   }
 
   // Force-reconnect (and drop stale sockets) when the page comes back to the
-  // foreground on mobile. iOS especially likes to keep a half-dead WS around.
+  // foreground on mobile. iOS especially likes to keep a half-dead WS around
+  // that says readyState=1 but no longer delivers messages — which means we
+  // miss the permission_request that fired while we were backgrounded. So we
+  // unconditionally close any existing WS on visibility-change and reconnect.
+  // The fresh WS triggers a new `hello` from the server, which carries any
+  // unanswered pending_perms so the card re-renders.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    if (!ws || ws.readyState > 1) connect();
+    if (!currentSource) return;
+    if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+    connect();
   });
 
   function send(obj) {
@@ -645,6 +652,15 @@
           setMode('code');
           setModel('');
           clearMessages();
+        }
+        // Re-render any unanswered permission requests so a phone reconnecting
+        // after tapping a push notification sees the card again.
+        if (Array.isArray(msg.pending_perms)) {
+          for (const p of msg.pending_perms) {
+            if (p && p.id && !pendingPerms.has(p.id)) {
+              appendPermissionCard(p.id, p.tool, p.input);
+            }
+          }
         }
         loadSessionList();
         break;

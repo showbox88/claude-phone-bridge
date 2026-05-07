@@ -99,6 +99,10 @@ class AppState:
     cwd: Path = field(init=False)
     websockets: set[WebSocket] = field(default_factory=set)
     pending: dict[str, asyncio.Future] = field(default_factory=dict)
+    # cb_id -> {tool, input}: keeps the metadata so newly-connected clients
+    # (e.g. the phone PWA after tapping a push notification) can re-render
+    # the permission card on reconnect.
+    pending_meta: dict[str, dict] = field(default_factory=dict)
     turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     current_turn_task: asyncio.Task | None = None
     session_id: str | None = None        # bridge session id (uuid hex)
@@ -182,6 +186,7 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
     cb_id = secrets.token_urlsafe(8)
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     state.pending[cb_id] = fut
+    state.pending_meta[cb_id] = {"tool": tool_name, "input": tool_input}
 
     await broadcast({
         "type": "permission_request",
@@ -203,6 +208,7 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
         return PermissionResultDeny(behavior="deny", message="user did not respond in time")
     finally:
         state.pending.pop(cb_id, None)
+        state.pending_meta.pop(cb_id, None)
 
     if decision == "allow":
         return PermissionResultAllow(behavior="allow", updated_input=None)
@@ -808,6 +814,13 @@ async def ws_handler(ws: WebSocket):
                     "model": sess.get("model") or "",
                     "messages": sess["messages"],
                 }
+        # Replay any unanswered permission requests so a phone reconnecting
+        # after a push-notification tap can render the card again.
+        hello["pending_perms"] = [
+            {"id": cid, "tool": meta.get("tool"), "input": meta.get("input")}
+            for cid, meta in state.pending_meta.items()
+            if cid in state.pending and not state.pending[cid].done()
+        ]
         await ws.send_text(json.dumps(hello, ensure_ascii=False))
         while True:
             raw = await ws.receive_text()
