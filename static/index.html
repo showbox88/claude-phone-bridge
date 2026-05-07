@@ -104,13 +104,20 @@
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
         <div class="composer-row">
-          <button id="attach-btn" class="icon-btn pill" title="添加图片或 PDF" type="button">＋</button>
-          <button id="camera-btn" class="icon-btn pill mobile-only" title="拍照" type="button">📷</button>
+          <div class="attach-wrap">
+            <button id="attach-btn" class="icon-btn pill" title="添加附件" type="button">＋</button>
+            <div id="attach-menu" class="menu attach-menu hidden">
+              <button type="button" data-pick="camera">📷 拍照</button>
+              <button type="button" data-pick="album">🖼️ 从相册选择</button>
+              <button type="button" data-pick="file">📄 选择文件</button>
+            </div>
+          </div>
           <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button">📎</button>
           <input id="file-input" type="file"
                  accept="image/*,application/pdf,text/*,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.tsx,.jsx,.html,.css,.scss,.cpp,.cc,.c,.h,.hpp,.java,.kt,.go,.rs,.rb,.php,.sh,.sql,.xlsx,.xls"
                  multiple hidden>
           <input id="camera-input" type="file" accept="image/*" capture="environment" hidden>
+          <input id="album-input" type="file" accept="image/*" multiple hidden>
           <textarea
             id="input"
             placeholder="发消息给 Claude…"

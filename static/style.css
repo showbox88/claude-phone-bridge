@@ -130,6 +130,16 @@ button { font-family: inherit; }
   box-shadow: 0 8px 24px rgba(0,0,0,.5);
 }
 .menu.hidden { display: none; }
+
+/* attach (+) popover — anchored above the composer button */
+.attach-wrap { position: relative; display: inline-flex; }
+.attach-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  top: auto; right: auto;
+  min-width: 160px;
+}
 .menu button {
   background: transparent; border: 0; color: var(--text);
   text-align: left; padding: 10px 12px; border-radius: 6px;
@@ -457,6 +467,45 @@ button { font-family: inherit; }
   color: var(--text-2);
 }
 .msg .msg-text { white-space: pre-wrap; }
+
+/* tool group — wraps a run of tool calls into one collapsible strip */
+.tool-group {
+  align-self: stretch;
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  overflow: hidden;
+}
+.tool-group > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-3);
+  user-select: none;
+}
+.tool-group > summary::-webkit-details-marker { display: none; }
+.tool-group .tg-icon {
+  font-size: 11px;
+  display: inline-block;
+  transition: transform .15s;
+}
+.tool-group[open] .tg-icon { transform: rotate(90deg); }
+.tool-group .tg-label { font-weight: 500; }
+.tool-group .tg-count {
+  background: var(--bg-3);
+  color: var(--text-2);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.tool-group .tg-body {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+}
+.tool-group .tool-block { font-size: 12px; }
 
 /* tool calls */
 .tool-block {

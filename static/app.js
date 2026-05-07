@@ -16,6 +16,8 @@
   const notifBtn = $('notif-btn');
   const attachBtn = $('attach-btn');
   const cameraBtn = $('camera-btn');
+  const attachMenu = $('attach-menu');
+  const albumInput = $('album-input');
   const filePickBtn = $('file-pick-btn');
   const fileInput = $('file-input');
   const cameraInput = $('camera-input');
@@ -80,36 +82,58 @@
     connDot.title = state;
   }
 
+  let reconnectTimer = null;
+
   function connect() {
+    // Skip if already connecting/open — prevents stacking multiple WS on mobile
+    // when visibility changes fire repeated reconnect attempts.
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+
     const url = wsUrl();
     if (!url) { setConn('disconnected'); return; }
     setConn('connecting');
-    ws = new WebSocket(url);
+    const sock = new WebSocket(url);
+    ws = sock;
 
-    ws.addEventListener('open', () => {
+    sock.addEventListener('open', () => {
+      if (sock !== ws) { try { sock.close(); } catch (_) {} return; }
       setConn('connected');
       reconnectDelay = 500;
+      if (pingTimer) clearInterval(pingTimer);
       pingTimer = setInterval(() => {
-        if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' }));
+        if (sock.readyState === 1) sock.send(JSON.stringify({ type: 'ping' }));
       }, 25000);
     });
 
-    ws.addEventListener('message', (e) => {
+    sock.addEventListener('message', (e) => {
+      // Drop messages from any stale socket that hasn't fully closed yet.
+      if (sock !== ws) return;
       try { handleEvent(JSON.parse(e.data)); }
       catch (err) { console.warn('bad ws message', err); }
     });
 
-    ws.addEventListener('close', () => {
+    sock.addEventListener('close', () => {
+      if (sock !== ws) return; // a newer socket has already taken over
       setConn('disconnected');
       if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
-      setTimeout(connect, reconnectDelay);
+      reconnectTimer = setTimeout(connect, reconnectDelay);
       reconnectDelay = Math.min(reconnectDelay * 1.6, 8000);
     });
 
-    ws.addEventListener('error', () => {
-      try { ws.close(); } catch (_) { /* noop */ }
+    sock.addEventListener('error', () => {
+      // Close THIS socket — never the module-level ws, which may already point
+      // at a newer connection.
+      try { sock.close(); } catch (_) { /* noop */ }
     });
   }
+
+  // Force-reconnect (and drop stale sockets) when the page comes back to the
+  // foreground on mobile. iOS especially likes to keep a half-dead WS around.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (!ws || ws.readyState > 1) connect();
+  });
 
   function send(obj) {
     if (!ws || ws.readyState !== 1) {
@@ -122,6 +146,33 @@
 
   // ---------- rendering ----------
   let currentAssistantBubble = null;
+  let currentToolGroup = null; // wraps consecutive tool_use/result into one collapsible block
+
+  function ensureToolGroup() {
+    if (currentToolGroup) return currentToolGroup;
+    const wrap = document.createElement('details');
+    wrap.className = 'tool-group';
+    wrap.innerHTML = `
+      <summary>
+        <span class="tg-icon">▸</span>
+        <span class="tg-label">工具调用</span>
+        <span class="tg-count">0</span>
+      </summary>
+      <div class="tg-body"></div>
+    `;
+    messages.appendChild(wrap);
+    currentToolGroup = wrap;
+    return wrap;
+  }
+
+  function bumpToolGroupCount() {
+    if (!currentToolGroup) return;
+    const body = currentToolGroup.querySelector('.tg-body');
+    const cnt = currentToolGroup.querySelector('.tg-count');
+    if (cnt && body) cnt.textContent = String(body.children.length);
+  }
+
+  function closeToolGroup() { currentToolGroup = null; }
   let currentAssistantBuffer = '';
   const pendingPerms = new Map(); // id -> card element
 
@@ -265,6 +316,7 @@
   function appendAssistantText(text) {
     hideEmptyState();
     if (!currentAssistantBubble) {
+      closeToolGroup();
       currentAssistantBubble = document.createElement('div');
       currentAssistantBubble.className = 'msg assistant';
       currentAssistantBuffer = '';
@@ -277,6 +329,8 @@
 
   function appendToolUse(tool, inp) {
     hideEmptyState();
+    const group = ensureToolGroup();
+    const body = group.querySelector('.tg-body');
     const el = document.createElement('details');
     el.className = 'tool-block';
     const inputJson = typeof inp === 'string' ? inp : JSON.stringify(inp, null, 2);
@@ -288,12 +342,15 @@
       </summary>
       <pre>${escapeHtml(inputJson)}</pre>
     `;
-    messages.appendChild(el);
-    scrollToBottom(true);
+    body.appendChild(el);
+    bumpToolGroupCount();
+    scrollToBottom(false);
   }
 
   function appendToolResult(ok, content) {
     hideEmptyState();
+    const group = ensureToolGroup();
+    const body = group.querySelector('.tg-body');
     const el = document.createElement('details');
     el.className = 'tool-block ' + (ok ? 'result' : 'error');
     const icon = ok ? '✓' : '✗';
@@ -306,7 +363,8 @@
       </summary>
       <pre>${escapeHtml(content || '')}</pre>
     `;
-    messages.appendChild(el);
+    body.appendChild(el);
+    bumpToolGroupCount();
     scrollToBottom(false);
   }
 
@@ -375,7 +433,7 @@
   function clearMessages() {
     messages.innerHTML = '';
     if (emptyState) messages.appendChild(emptyState);
-    currentAssistantBubble = null;
+    currentAssistantBubble = null; closeToolGroup();
     pendingPerms.clear();
   }
 
@@ -387,13 +445,13 @@
       switch (m.role) {
         case 'user':
           appendUser(c.text || '', c.images || [], c.files || []);
-          currentAssistantBubble = null;
+          currentAssistantBubble = null; closeToolGroup();
           break;
         case 'assistant_text':
           appendAssistantText(c.text || '');
           break;
         case 'tool_use':
-          currentAssistantBubble = null;
+          currentAssistantBubble = null; closeToolGroup();
           appendToolUse(c.tool, c.input);
           break;
         case 'tool_result':
@@ -401,7 +459,7 @@
           break;
       }
     }
-    currentAssistantBubble = null;
+    currentAssistantBubble = null; closeToolGroup();
   }
 
   function setHeader(title, cwd) {
@@ -571,7 +629,7 @@
         break;
       case 'error':
         appendError(msg.msg || 'error');
-        currentAssistantBubble = null;
+        currentAssistantBubble = null; closeToolGroup();
         setResponding(false);
         break;
       case 'user_echo':
@@ -581,18 +639,18 @@
         appendAssistantText(msg.text || '');
         break;
       case 'tool_use':
-        currentAssistantBubble = null;
+        currentAssistantBubble = null; closeToolGroup();
         appendToolUse(msg.tool, msg.input);
         break;
       case 'tool_result':
         appendToolResult(msg.ok, msg.content);
         break;
       case 'permission_request':
-        currentAssistantBubble = null;
+        currentAssistantBubble = null; closeToolGroup();
         appendPermissionCard(msg.id, msg.tool, msg.input);
         break;
       case 'turn_done':
-        currentAssistantBubble = null;
+        currentAssistantBubble = null; closeToolGroup();
         setResponding(false);
         loadSessionList();  // refresh title (auto-named) and updated_at
         break;
@@ -927,34 +985,85 @@
     }
   }
 
-  attachBtn.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', async (e) => {
-    if (!e.target.files || e.target.files.length === 0) return;
-    await uploadFiles(e.target.files);
-    e.target.value = '';
+  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
+  attachBtn.addEventListener('click', (e) => {
+    if (!isTouch) { fileInput.click(); return; }
+    e.stopPropagation();
+    attachMenu.classList.toggle('hidden');
   });
 
-  if (cameraBtn) {
-    cameraBtn.addEventListener('click', () => cameraInput.click());
-    cameraInput.addEventListener('change', async (e) => {
-      if (!e.target.files || e.target.files.length === 0) return;
-      await uploadFiles(e.target.files);
-      e.target.value = '';
+  if (attachMenu) {
+    attachMenu.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-pick]');
+      if (!btn) return;
+      attachMenu.classList.add('hidden');
+      const pick = btn.dataset.pick;
+      if (pick === 'camera') cameraInput.click();
+      else if (pick === 'album') albumInput.click();
+      else if (pick === 'file') fileInput.click();
+    });
+    document.addEventListener('click', (e) => {
+      if (attachMenu.classList.contains('hidden')) return;
+      if (!attachMenu.contains(e.target) && e.target !== attachBtn) {
+        attachMenu.classList.add('hidden');
+      }
     });
   }
 
-  // paste images
-  input.addEventListener('paste', (e) => {
-    const items = e.clipboardData && e.clipboardData.items;
-    if (!items) return;
-    const files = [];
-    for (const it of items) {
-      if (it.kind === 'file' && it.type.startsWith('image/')) {
-        const f = it.getAsFile(); if (f) files.push(f);
+  const handleUploadInput = async (e) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    await uploadFiles(e.target.files);
+    e.target.value = '';
+  };
+  fileInput.addEventListener('change', handleUploadInput);
+  if (cameraInput) cameraInput.addEventListener('change', handleUploadInput);
+  if (albumInput) albumInput.addEventListener('change', handleUploadInput);
+
+  if (cameraBtn) cameraBtn.style.display = 'none';
+
+  // paste images — listen on document so screenshots paste even when the
+  // textarea isn't focused; handle both clipboardData.items and .files
+  // (different browsers populate one or the other for screenshots).
+  function extractClipboardImages(cd) {
+    const out = [];
+    if (!cd) return out;
+    const seen = new Set();
+    if (cd.items) {
+      for (const it of cd.items) {
+        if (it.kind === 'file' && it.type && it.type.startsWith('image/')) {
+          const f = it.getAsFile();
+          if (f) { out.push(f); seen.add(f); }
+        }
       }
     }
-    if (files.length) { e.preventDefault(); uploadFiles(files); }
-  });
+    if (cd.files && cd.files.length) {
+      for (const f of cd.files) {
+        if (f && f.type && f.type.startsWith('image/') && !seen.has(f)) {
+          out.push(f);
+        }
+      }
+    }
+    return out;
+  }
+
+  function onPaste(e) {
+    const tgt = e.target;
+    const inEditable = tgt && (
+      tgt === input ||
+      tgt.isContentEditable ||
+      (tgt.tagName === 'INPUT' && tgt.type === 'text')
+    );
+    const files = extractClipboardImages(e.clipboardData);
+    if (!files.length) return;
+    // Prevent the image from being pasted as a literal data URL into the textarea.
+    e.preventDefault();
+    uploadFiles(files);
+    if (!inEditable) input.focus();
+  }
+  // Bind on document only — paste events bubble up from the textarea, so a
+  // single listener covers both "focused in input" and "focused elsewhere".
+  document.addEventListener('paste', onPaste);
 
   // ---------- file/dir picker ----------
   // mode: 'cwd' (pick directory to switch into) | 'file' (pick a file to attach)
