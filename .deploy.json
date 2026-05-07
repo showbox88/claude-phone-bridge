@@ -1,0 +1,25 @@
+{
+  "service": "phone-bridge",
+  "host": "dashboard-server",
+  "vm_path": "/home/dev/phone-bridge",
+  "health_url": "https://dashboard-server.tail4cfa2.ts.net/api/health",
+  "exclude": [
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    "*.pyc",
+    "*.egg-info",
+    ".env",
+    ".env.bak",
+    ".bridge_uploads",
+    ".bridge_data",
+    "tests",
+    "node_modules"
+  ],
+  "keep_files": [".env", ".bridge_uploads", ".bridge_data"],
+  "pre_restart": [
+    "[ -d .venv ] || python3 -m venv .venv",
+    ".venv/bin/pip install -r requirements.txt --quiet"
+  ],
+  "restart_cmd": "sudo systemctl restart phone-bridge"
+}

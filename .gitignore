@@ -1,4 +1,6 @@
 .env
+.bridge_uploads/
+.bridge_data/
 push_subs.json
 *.pem
 *.crt
