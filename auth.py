@@ -211,13 +211,18 @@ def otpauth_uri(secret: str, label: str, issuer: str = "Phone Bridge") -> str:
     return pyotp.totp.TOTP(secret).provisioning_uri(name=label, issuer_name=issuer)
 
 
-def qr_svg(data: str, scale: int = 5) -> str:
-    """Return inline SVG markup for a QR encoding `data`."""
+def qr_svg(data: str, scale: int = 6) -> str:
+    """Return inline SVG markup for a QR encoding `data`.
+
+    QR conventions require dark-on-light; inverted (light-on-dark) QRs are
+    rejected by Google Authenticator and many other scanners. We render
+    black on white and let the page CSS frame it on a white tile.
+    """
     import io as _io
     qr = segno.make(data, error="m")
     out = _io.BytesIO()
-    qr.save(out, kind="svg", scale=scale, dark="#e6edf3", light="#161b22",
-            border=2, xmldecl=False)
+    qr.save(out, kind="svg", scale=scale, dark="#000000", light="#ffffff",
+            border=4, xmldecl=False)
     return out.getvalue().decode("utf-8")
 
 

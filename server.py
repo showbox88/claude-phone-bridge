@@ -669,8 +669,8 @@ button{width:100%;padding:0.7rem;margin-top:1.1rem;background:var(--accent);
 button:hover{filter:brightness(1.07)}
 .error{color:var(--red);font-size:0.85rem;margin-top:0.6rem;min-height:1.2em}
 .muted{color:var(--muted);font-size:0.82rem}
-.qr{display:flex;justify-content:center;margin:1rem 0;background:var(--card);border-radius:8px;padding:0.75rem}
-.qr svg{max-width:230px;height:auto}
+.qr{display:flex;justify-content:center;margin:1rem 0;background:#ffffff;border-radius:8px;padding:0.75rem}
+.qr svg{max-width:260px;height:auto;display:block}
 .code{background:#0b0f14;border:1px solid var(--line);border-radius:6px;
   padding:0.6rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:0.85rem;
   word-break:break-all;color:#d2d2d2}
