@@ -740,15 +740,27 @@ async def setup_verify_get():
     label = os.environ.get("BRIDGE_NAME") or socket.gethostname()
     uri = auth_mod.otpauth_uri(secret, label=label, issuer="Phone Bridge")
     qr = auth_mod.qr_svg(uri)
+    # Pretty 4-char chunks for manual entry
+    pretty_secret = " ".join(secret[i:i+4] for i in range(0, len(secret), 4))
     return _page("Scan TOTP", f"""
-<h1>Scan to add 2FA</h1>
-<p class="sub">Open Authenticator (Google / 1Password / Authy) and scan the QR. Then enter the 6-digit code below to confirm and finish setup.</p>
+<h1>Add 2FA</h1>
+<p class="sub">Three ways — pick whichever works:</p>
+
+<p><b>1. On your phone:</b> tap this link, it'll open your Authenticator app and add the entry directly.</p>
+<p style="margin:0.6rem 0 1.2rem"><a href="{uri}" style="display:inline-block;padding:0.6rem 1rem;background:#0b0f14;border:1px solid var(--accent);border-radius:8px;text-decoration:none">Open in Authenticator app →</a></p>
+
+<p><b>2. Scan QR with Authenticator:</b></p>
 <div class="qr">{qr}</div>
-<details><summary class="muted">Can't scan? show secret</summary>
-<div class="code" style="margin-top:0.5rem">{secret}</div>
-</details>
-<form method="post" action="/setup/verify">
-  <label for="code">6-digit code</label>
+
+<p><b>3. Manual entry</b> (if scan fails) — in Google Authenticator: <i>+ → Enter a setup key</i></p>
+<table style="width:100%;font-size:0.85rem;margin:0.5rem 0">
+  <tr><td class="muted" style="padding:0.2rem 0;width:5em">Account</td><td><code>Phone Bridge</code></td></tr>
+  <tr><td class="muted" style="padding:0.2rem 0">Key</td><td><code style="font-size:0.95rem">{pretty_secret}</code></td></tr>
+  <tr><td class="muted" style="padding:0.2rem 0">Type</td><td>Time-based (TOTP)</td></tr>
+</table>
+
+<form method="post" action="/setup/verify" style="margin-top:1.5rem">
+  <label for="code">After adding it, enter the current 6-digit code</label>
   <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" required autofocus autocomplete="one-time-code">
   <label for="device_name">This device's name</label>
   <input id="device_name" name="device_name" type="text" placeholder="e.g. Office PC" maxlength="40" value="">
