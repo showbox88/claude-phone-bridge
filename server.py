@@ -642,7 +642,12 @@ async def auth_middleware(request: Request, call_next):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
     request.state.device = device
-    return await call_next(request)
+    response = await call_next(request)
+    # Sliding expiry: every authed request renews the cookie for another N days.
+    token = request.cookies.get(auth_mod.COOKIE_NAME)
+    if token:
+        auth_mod.set_session_cookie(response, token, max_age=_COOKIE_SECONDS)
+    return response
 
 
 # ---------- Auth pages: shared HTML scaffold ----------
