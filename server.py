@@ -22,12 +22,17 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import (
-    FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect,
+    FastAPI, File, Form, HTTPException, Request, Response, UploadFile,
+    WebSocket, WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+)
 from fastapi.staticfiles import StaticFiles
 import socket
+
+import auth as auth_mod
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -563,25 +568,355 @@ _allowed_origins = ["*"] if _origins_env.strip() == "*" else [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=False,
+    allow_credentials=True,    # cookies are required for session auth
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
 
+# ============================================================================
+# Authentication: password + TOTP, persistent device-bound sessions.
+# Public endpoints: /login /logout /setup /setup/verify /static/* /sw.js
+#                   /manifest.json /icon.svg /api/health /api/vapid-public-key
+# Everything else (API, WebSocket, /uploads, /) requires a valid bridge_session
+# cookie. WebSocket auth is enforced inside the /ws handler.
+# ============================================================================
+
+_AUTH_FILE = Path(os.environ.get(
+    "BRIDGE_AUTH_FILE", str(Path(__file__).resolve().parent / ".bridge_auth.json")
+))
+_COOKIE_DAYS = int(os.environ.get("BRIDGE_COOKIE_DAYS", "30"))
+_COOKIE_SECONDS = _COOKIE_DAYS * 86400
+auth_state = auth_mod.AuthState(_AUTH_FILE)
+
+_PUBLIC_PREFIXES = ("/login", "/logout", "/setup", "/static/")
+_PUBLIC_EXACT = {
+    "/sw.js", "/manifest.json", "/icon.svg",
+    "/api/health", "/api/vapid-public-key",
+}
+
+
+def _is_public(path: str) -> bool:
+    if path in _PUBLIC_EXACT:
+        return True
+    for p in _PUBLIC_PREFIXES:
+        base = p.rstrip("/")
+        if path == base or path.startswith(base + "/"):
+            return True
+    return False
+
+
+def _wants_html(request: Request) -> bool:
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept and "application/json" not in accept
+
+
+def _current_device(request: Request) -> dict | None:
+    token = request.cookies.get(auth_mod.COOKIE_NAME)
+    if not token:
+        return None
+    return auth_state.lookup_token(
+        token,
+        ip=auth_mod.client_ip(request),
+        ua=request.headers.get("user-agent", ""),
+    )
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if _is_public(path):
+        return await call_next(request)
+
+    # Not initialized yet → force first-time setup
+    if not auth_state.is_initialized():
+        if _wants_html(request):
+            return RedirectResponse("/setup", status_code=303)
+        return JSONResponse({"error": "not initialized"}, status_code=503)
+
+    device = _current_device(request)
+    if device is None:
+        if _wants_html(request):
+            return RedirectResponse("/login", status_code=303)
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+
+    request.state.device = device
+    return await call_next(request)
+
+
+# ---------- Auth pages: shared HTML scaffold ----------
+
+_AUTH_PAGE_CSS = """
+:root{--bg:#0e1116;--card:#161b22;--line:#2a313a;--text:#e6edf3;--muted:#8b949e;
+      --accent:#58a6ff;--red:#f85149;--green:#3fb950}
+*{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:1.6rem 1.4rem;width:100%;max-width:420px}
+h1{margin:0 0 0.25rem;font-size:1.2rem}
+.sub{color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem}
+label{display:block;color:var(--muted);font-size:0.78rem;text-transform:uppercase;
+  letter-spacing:.05em;margin:0.85rem 0 0.3rem}
+input[type=text],input[type=password]{width:100%;padding:0.65rem 0.75rem;
+  background:#0b0f14;border:1px solid var(--line);border-radius:8px;color:var(--text);
+  font:inherit;font-size:1rem}
+input:focus{outline:none;border-color:var(--accent)}
+button{width:100%;padding:0.7rem;margin-top:1.1rem;background:var(--accent);
+  color:#0b0f14;border:0;border-radius:8px;font:inherit;font-weight:600;cursor:pointer;
+  font-size:0.95rem}
+button:hover{filter:brightness(1.07)}
+.error{color:var(--red);font-size:0.85rem;margin-top:0.6rem;min-height:1.2em}
+.muted{color:var(--muted);font-size:0.82rem}
+.qr{display:flex;justify-content:center;margin:1rem 0;background:var(--card);border-radius:8px;padding:0.75rem}
+.qr svg{max-width:230px;height:auto}
+.code{background:#0b0f14;border:1px solid var(--line);border-radius:6px;
+  padding:0.6rem;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:0.85rem;
+  word-break:break-all;color:#d2d2d2}
+.devices li{list-style:none;padding:0.6rem 0;border-bottom:1px solid var(--line)}
+.devices li:last-child{border:none}
+.devices .row{display:flex;justify-content:space-between;align-items:center;gap:0.5rem}
+.devices small{color:var(--muted);display:block;margin-top:0.15rem;font-size:0.75rem}
+.devices form{margin:0}
+.devices button.danger{padding:0.3rem 0.7rem;font-size:0.78rem;width:auto;
+  background:transparent;border:1px solid var(--red);color:var(--red)}
+.devices button.danger:hover{background:rgba(248,81,73,0.1)}
+.this-device{color:var(--green);font-size:0.7rem;margin-left:0.4rem}
+"""
+
+
+def _page(title: str, body: str, *, status: int = 200) -> HTMLResponse:
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title} — Phone Bridge</title>
+<style>{_AUTH_PAGE_CSS}</style></head>
+<body><div class="wrap"><div class="card">{body}</div></div></body></html>"""
+    return HTMLResponse(html, status_code=status)
+
+
+# ---------- /setup (first-time only) ----------
+
+@app.get("/setup")
+async def setup_get():
+    if auth_state.is_initialized():
+        # Stage 2 path — they may be mid-flow if no device exists yet
+        if not auth_state.list_devices():
+            return RedirectResponse("/setup/verify", status_code=303)
+        return RedirectResponse("/login", status_code=303)
+    return _page("First-time setup", """
+<h1>First-time setup</h1>
+<p class="sub">Set the master password. After this, scan the TOTP QR with your authenticator app.</p>
+<form method="post" action="/setup">
+  <label for="password">Password (min 12 chars)</label>
+  <input id="password" name="password" type="password" minlength="12" required autofocus autocomplete="new-password">
+  <label for="password2">Confirm</label>
+  <input id="password2" name="password2" type="password" minlength="12" required autocomplete="new-password">
+  <button type="submit">Continue</button>
+</form>
+""")
+
+
+@app.post("/setup")
+async def setup_post(request: Request, password: str = Form(...), password2: str = Form(...)):
+    if auth_state.is_initialized():
+        return RedirectResponse("/login", status_code=303)
+    if password != password2:
+        return _page("First-time setup", """<h1>First-time setup</h1>
+<p class="error">Passwords don't match. <a href="/setup">Try again</a>.</p>""", status=400)
+    if len(password) < 12:
+        return _page("First-time setup", """<h1>First-time setup</h1>
+<p class="error">Password too short (need at least 12). <a href="/setup">Try again</a>.</p>""", status=400)
+    auth_state.initialize(password)
+    return RedirectResponse("/setup/verify", status_code=303)
+
+
+@app.get("/setup/verify")
+async def setup_verify_get():
+    if not auth_state.is_initialized() or auth_state.list_devices():
+        return RedirectResponse("/login", status_code=303)
+    secret = auth_state.totp_secret() or ""
+    label = os.environ.get("BRIDGE_NAME") or socket.gethostname()
+    uri = auth_mod.otpauth_uri(secret, label=label, issuer="Phone Bridge")
+    qr = auth_mod.qr_svg(uri)
+    return _page("Scan TOTP", f"""
+<h1>Scan to add 2FA</h1>
+<p class="sub">Open Authenticator (Google / 1Password / Authy) and scan the QR. Then enter the 6-digit code below to confirm and finish setup.</p>
+<div class="qr">{qr}</div>
+<details><summary class="muted">Can't scan? show secret</summary>
+<div class="code" style="margin-top:0.5rem">{secret}</div>
+</details>
+<form method="post" action="/setup/verify">
+  <label for="code">6-digit code</label>
+  <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" required autofocus autocomplete="one-time-code">
+  <label for="device_name">This device's name</label>
+  <input id="device_name" name="device_name" type="text" placeholder="e.g. Office PC" maxlength="40" value="">
+  <button type="submit">Finish setup</button>
+</form>
+""")
+
+
+@app.post("/setup/verify")
+async def setup_verify_post(
+    request: Request,
+    code: str = Form(...),
+    device_name: str = Form(""),
+):
+    if not auth_state.is_initialized() or auth_state.list_devices():
+        return RedirectResponse("/login", status_code=303)
+    if not auth_state.verify_totp(code):
+        return _page("Scan TOTP", """<h1>Scan to add 2FA</h1>
+<p class="error">Wrong code. <a href="/setup/verify">Try again</a>.</p>""", status=400)
+    name = (device_name.strip() or _ua_short(request))[:40]
+    token = auth_state.issue_device_token(
+        name=name,
+        ip=auth_mod.client_ip(request),
+        ua=request.headers.get("user-agent", ""),
+    )
+    resp = RedirectResponse("/", status_code=303)
+    auth_mod.set_session_cookie(resp, token, max_age=_COOKIE_SECONDS)
+    return resp
+
+
+# ---------- /login ----------
+
+def _ua_short(request: Request) -> str:
+    ua = request.headers.get("user-agent", "")
+    if "iPhone" in ua: return "iPhone"
+    if "iPad" in ua: return "iPad"
+    if "Android" in ua: return "Android"
+    if "Macintosh" in ua: return "Mac"
+    if "Windows" in ua: return "Windows"
+    if "Linux" in ua: return "Linux"
+    return "device"
+
+
+@app.get("/login")
+async def login_get(request: Request):
+    if not auth_state.is_initialized():
+        return RedirectResponse("/setup", status_code=303)
+    if _current_device(request):
+        return RedirectResponse("/", status_code=303)
+    return _page("Sign in", f"""
+<h1>Sign in</h1>
+<p class="sub">Phone Bridge — enter password and the 6-digit code from your authenticator.</p>
+<form method="post" action="/login">
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" required autofocus autocomplete="current-password">
+  <label for="code">6-digit code</label>
+  <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{{6}}" maxlength="6" required autocomplete="one-time-code">
+  <label for="device_name">Name this device (optional)</label>
+  <input id="device_name" name="device_name" type="text" maxlength="40" placeholder="e.g. {_ua_short(request)}">
+  <button type="submit">Sign in</button>
+</form>
+""")
+
+
+@app.post("/login")
+async def login_post(
+    request: Request,
+    password: str = Form(...),
+    code: str = Form(...),
+    device_name: str = Form(""),
+):
+    if not auth_state.is_initialized():
+        return RedirectResponse("/setup", status_code=303)
+    ip = auth_mod.client_ip(request)
+    allowed, retry_after = auth_state.can_attempt(ip)
+    if not allowed:
+        return _page("Sign in", f"""<h1>Sign in</h1>
+<p class="error">Too many failed attempts. Try again in {retry_after}s.</p>""", status=429)
+    if not (auth_state.verify_password(password) and auth_state.verify_totp(code)):
+        auth_state.record_fail(ip)
+        return _page("Sign in", """<h1>Sign in</h1>
+<p class="error">Invalid password or code. <a href="/login">Try again</a>.</p>""", status=401)
+    auth_state.clear_fails(ip)
+    name = (device_name.strip() or _ua_short(request))[:40]
+    token = auth_state.issue_device_token(
+        name=name, ip=ip, ua=request.headers.get("user-agent", ""),
+    )
+    resp = RedirectResponse("/", status_code=303)
+    auth_mod.set_session_cookie(resp, token, max_age=_COOKIE_SECONDS)
+    return resp
+
+
+# ---------- /logout ----------
+
+@app.post("/logout")
+@app.get("/logout")
+async def logout(request: Request):
+    token = request.cookies.get(auth_mod.COOKIE_NAME)
+    if token:
+        h = auth_mod._hash_token(token)
+        auth_state.revoke(h)
+    resp = RedirectResponse("/login", status_code=303)
+    auth_mod.clear_session_cookie(resp)
+    return resp
+
+
+# ---------- /devices (manage logged-in devices) ----------
+
+@app.get("/devices")
+async def devices_get(request: Request):
+    me = _current_device(request)  # already authed by middleware, but useful for "this device" marker
+    devs = sorted(auth_state.list_devices(), key=lambda d: d.get("last_seen", 0), reverse=True)
+    import datetime as _dt
+    rows_html = []
+    for d in devs:
+        last = d.get("last_seen", 0)
+        when = _dt.datetime.fromtimestamp(int(last)).strftime("%Y-%m-%d %H:%M") if last else "—"
+        ip = d.get("last_ip", "") or "—"
+        is_me = me and d["hash"] == me["hash"]
+        marker = '<span class="this-device">THIS DEVICE</span>' if is_me else ""
+        rows_html.append(f"""<li><div class="row">
+  <div><b>{_html_escape(d.get('name','?'))}</b>{marker}<small>{ip} · last seen {when}</small></div>
+  <form method="post" action="/devices/revoke">
+    <input type="hidden" name="hash" value="{d['hash']}">
+    <button class="danger" type="submit">Revoke</button>
+  </form>
+</div></li>""")
+    body = f"""
+<h1>Logged-in devices</h1>
+<p class="sub">Revoke any device to log it out immediately.</p>
+<ul class="devices">{''.join(rows_html) or '<li class="muted">No devices.</li>'}</ul>
+<p style="margin-top:1.2rem"><a href="/">← back</a> · <a href="/logout">log out this device</a></p>
+"""
+    return _page("Devices", body)
+
+
+@app.post("/devices/revoke")
+async def devices_revoke(request: Request, hash: str = Form(...)):
+    me = _current_device(request)
+    auth_state.revoke(hash)
+    if me and me["hash"] == hash:
+        resp = RedirectResponse("/login", status_code=303)
+        auth_mod.clear_session_cookie(resp)
+        return resp
+    return RedirectResponse("/devices", status_code=303)
+
+
+def _html_escape(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+              .replace('"', "&quot;").replace("'", "&#39;"))
+
+
 @app.get("/api/health")
-async def api_health():
-    """Lightweight probe. The phone-side app polls this on each saved source
-    to render online/offline status dots."""
-    return {
-        "ok": True,
+async def api_health(request: Request):
+    """Lightweight probe. Returns minimal info to anonymous clients (so the
+    dashboard's HTTP probe still works without auth) and full session info
+    only to authenticated devices."""
+    base = {"ok": True}
+    if auth_state.is_initialized() and _current_device(request) is None:
+        return base
+    base.update({
         "name": os.environ.get("BRIDGE_NAME") or socket.gethostname(),
         "cwd_root": str(state.cwd_root).replace("\\", "/"),
         "session_id": state.session_id,
         "mode": state.mode,
         "model": state.model or "",
-    }
+    })
+    return base
 
 
 # ---------- REST: VAPID/push ----------
@@ -794,6 +1129,13 @@ async def api_upload(
 
 @app.websocket("/ws")
 async def ws_handler(ws: WebSocket):
+    # WebSocket bypasses HTTP middleware, so check the session cookie here.
+    if auth_state.is_initialized():
+        token = ws.cookies.get(auth_mod.COOKIE_NAME)
+        if not token or auth_state.lookup_token(token) is None:
+            # Standard policy violation close code; browser receives a clean reject.
+            await ws.close(code=4401)
+            return
     await ws.accept()
     state.websockets.add(ws)
     log.info("websocket connected (total=%d)", len(state.websockets))
