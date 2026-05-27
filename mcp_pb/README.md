@@ -7,7 +7,7 @@ Exposes PocketBase as a [Model Context Protocol](https://modelcontextprotocol.io
 ```
 claude.ai project (Anthropic cloud)
   ↓ HTTPS + Bearer token
-https://dashboard-server.tail4cfa2.ts.net:10000/mcp       ← Tailscale Funnel (public)
+https://dashboard-server.tail4cfa2.ts.net/mcp             ← Tailscale Funnel (public, port 443)
   ↓ proxy
 127.0.0.1:8091     ← mcp_pb.service (this directory)
   ↓ HTTP
@@ -45,15 +45,20 @@ https://dashboard-server.tail4cfa2.ts.net:10000/mcp       ← Tailscale Funnel (
    sudo cp mcp_pb.service /etc/systemd/system/
    sudo systemctl enable --now mcp_pb
    ```
-5. Tailscale Funnel exposes it publicly with auto-HTTPS:
+5. Tailscale Funnel exposes it publicly with auto-HTTPS on standard port 443
+   at path `/mcp` (so the public URL stays clean and works with strict HTTP
+   clients that don't allow custom ports):
    ```bash
-   sudo tailscale funnel --bg --https=10000 http://127.0.0.1:8091
+   sudo tailscale funnel --bg --https=443 --set-path=/mcp http://127.0.0.1:8091
    ```
+   Tailscale strips the `/mcp` prefix before forwarding, so the upstream
+   FastMCP server is configured to mount at `/` (see `streamable_http_path`
+   in `server.py`) rather than its default `/mcp`.
 
 ## Configuring claude.ai
 
 1. Open https://claude.ai → Settings → **Connectors** → **Add custom connector**
-2. URL: `https://dashboard-server.tail4cfa2.ts.net:10000/mcp`
+2. URL: `https://dashboard-server.tail4cfa2.ts.net/mcp`
 3. Authorization: Bearer Token, paste the value of `MCP_PB_BEARER_TOKEN` from the server's `.env`
 4. Tools appear in the conversation tool picker
 5. Update the Smart Note project's Instructions with [`SMARTNOTE_PROMPT.md`](./SMARTNOTE_PROMPT.md) — drops all Notion-write calls in favor of `pb_*` tools
@@ -70,16 +75,16 @@ https://dashboard-server.tail4cfa2.ts.net:10000/mcp       ← Tailscale Funnel (
 
 ```bash
 # liveness
-curl https://dashboard-server.tail4cfa2.ts.net:10000/health
+curl https://dashboard-server.tail4cfa2.ts.net/health
 
 # auth required (should 401)
-curl https://dashboard-server.tail4cfa2.ts.net:10000/mcp
+curl https://dashboard-server.tail4cfa2.ts.net/mcp
 
 # MCP initialize handshake (replace TOKEN)
 curl -X POST \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json, text/event-stream" \
-  https://dashboard-server.tail4cfa2.ts.net:10000/mcp \
+  https://dashboard-server.tail4cfa2.ts.net/mcp \
   -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual","version":"1"}},"id":1}'
 ```

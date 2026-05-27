@@ -124,19 +124,31 @@ def _pb(method: str, path: str, body: Any | None = None) -> Any:
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get(
         "MCP_PB_ALLOWED_HOSTS",
-        "dashboard-server.tail4cfa2.ts.net:10000,127.0.0.1:*,localhost:*"
+        # The bare hostname (port 443) is what claude.ai will hit through the
+        # Tailscale Funnel `/mcp` path. :10000 stays as a fallback for direct
+        # curl debugging.
+        "dashboard-server.tail4cfa2.ts.net,"
+        "dashboard-server.tail4cfa2.ts.net:443,"
+        "dashboard-server.tail4cfa2.ts.net:10000,"
+        "127.0.0.1:*,localhost:*"
     ).split(",") if h.strip()
 ]
 ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
         "MCP_PB_ALLOWED_ORIGINS",
-        "https://dashboard-server.tail4cfa2.ts.net:10000,http://127.0.0.1:*,http://localhost:*"
+        "https://dashboard-server.tail4cfa2.ts.net,"
+        "https://dashboard-server.tail4cfa2.ts.net:10000,"
+        "http://127.0.0.1:*,http://localhost:*"
     ).split(",") if o.strip()
 ]
 
 mcp = FastMCP("pocketbase")
 mcp.settings.transport_security.allowed_hosts = ALLOWED_HOSTS
 mcp.settings.transport_security.allowed_origins = ALLOWED_ORIGINS
+# Serve MCP at root path. Tailscale Funnel strips the `--set-path=/mcp` prefix
+# before forwarding to us, so the public URL `https://host/mcp` arrives here
+# as `/`. Make FastMCP's mount match.
+mcp.settings.streamable_http_path = "/"
 
 
 @mcp.tool()
