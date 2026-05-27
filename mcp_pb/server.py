@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
-"""PocketBase MCP server for claude.ai's Custom Connectors.
+"""PocketBase MCP server for claude.ai Custom Connectors.
 
-Exposes 5 generic CRUD tools + 1 domain helper. claude.ai calls these over
-HTTPS through Tailscale Funnel; we re-auth to local PocketBase and proxy.
+Exposes 5 generic CRUD tools + 1 domain helper over PocketBase. claude.ai
+calls these over HTTPS through Tailscale Funnel.
 
-Why "generic + schema introspection" instead of one tool per collection:
-- New PB collections (or schema changes) automatically show up via the
-  pb_list_collections() tool. No code change required.
-- The Notion-side Smart Note prompt has 12 select fields with hardcoded
-  enums; tomorrow's enum addition won't ripple to claude.ai's prompt if it
-  asks pb_list_collections() at conversation start.
-
-Auth model: Bearer token in `Authorization: Bearer <token>` header. The
-token is shared with claude.ai's Connector config. Tailscale Funnel handles
-HTTPS termination + valid cert. Token is the only thing between the public
-internet and your PocketBase, so make it long and random.
-
-Run:  python3 server.py
-Or:   systemctl start mcp_pb
+Auth: OAuth 2.0 with Dynamic Client Registration. claude.ai's Custom
+Connector UI does the DCR flow automatically — leave both OAuth Client ID
+and Client Secret fields blank in the UI. The provider is single-tenant
+and auto-approves all authorize requests (no user-interactive login).
+Tokens live in process memory; restart wipes state and claude.ai re-registers
+transparently.
 """
 from __future__ import annotations
 
@@ -29,11 +21,27 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationCode,
+    AuthorizationParams,
+    OAuthAuthorizationServerProvider,
+    OAuthClientInformationFull,
+    OAuthToken,
+    RefreshToken,
+    construct_redirect_uri,
+)
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from mcp.server.fastmcp import FastMCP
-from starlette.middleware.base import BaseHTTPMiddleware
+from pydantic import AnyHttpUrl
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -57,12 +65,12 @@ _load_env(os.environ.get("MCP_PB_ENV", "/home/dev/phone-bridge/.env"))
 PB_URL          = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090").rstrip("/")
 PB_EMAIL        = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
 PB_PASSWORD     = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
-MCP_TOKEN       = os.environ.get("MCP_PB_BEARER_TOKEN", "")
 LISTEN_HOST     = os.environ.get("MCP_PB_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("MCP_PB_PORT", "8091"))
-
-if not MCP_TOKEN:
-    raise SystemExit("MCP_PB_BEARER_TOKEN not set — generate one and put in .env")
+PUBLIC_URL      = os.environ.get(
+    "MCP_PB_PUBLIC_URL",
+    "https://dashboard-server.tail4cfa2.ts.net/mcp",
+).rstrip("/")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("mcp_pb")
@@ -91,7 +99,6 @@ _pb_token: str | None = None
 _pb_token_expiry: float = 0.0
 
 def _pb_auth() -> str:
-    """Return a valid PB superuser token; cache for ~25 min."""
     global _pb_token, _pb_token_expiry
     if _pb_token and time.time() < _pb_token_expiry:
         return _pb_token
@@ -116,20 +123,165 @@ def _pb(method: str, path: str, body: Any | None = None) -> Any:
 
 
 # ---------------------------------------------------------------------------
-# MCP server + tools
+# OAuth 2.0 provider — single-tenant, auto-approve, in-memory state
 # ---------------------------------------------------------------------------
-# FastMCP defaults to DNS-rebinding protection that only accepts localhost.
-# Behind Tailscale Funnel the Host header is the funnel hostname, so we
-# explicitly whitelist it. Comma-separate in env if you want multiple hosts.
+class InMemoryOAuthProvider(OAuthAuthorizationServerProvider):
+    """Bare-minimum OAuth 2.0 implementation for a personal MCP server.
+
+    - DCR (Dynamic Client Registration) lets claude.ai self-register
+    - /authorize auto-approves (no user UI; we trust whoever has DCR access)
+    - Standard authorization-code-with-PKCE flow
+    - Access tokens are random url-safe strings, kept in memory
+    - Refresh tokens supported but optional
+
+    State resets on process restart; claude.ai re-runs DCR transparently.
+    """
+    def __init__(self) -> None:
+        self.clients: dict[str, OAuthClientInformationFull] = {}
+        self.auth_codes: dict[str, AuthorizationCode] = {}
+        self.access_tokens: dict[str, AccessToken] = {}
+        self.refresh_tokens: dict[str, RefreshToken] = {}
+
+    async def get_client(self, client_id: str) -> Optional[OAuthClientInformationFull]:
+        return self.clients.get(client_id)
+
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        self.clients[client_info.client_id] = client_info
+        log.info("OAuth: registered client %s", client_info.client_id[:8])
+
+    async def authorize(
+        self,
+        client: OAuthClientInformationFull,
+        params: AuthorizationParams,
+    ) -> str:
+        # Auto-approve: skip any user-interactive step.
+        code = secrets.token_urlsafe(32)
+        self.auth_codes[code] = AuthorizationCode(
+            code=code,
+            scopes=params.scopes or [],
+            expires_at=time.time() + 600,
+            client_id=client.client_id,
+            code_challenge=params.code_challenge,
+            redirect_uri=params.redirect_uri,
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            resource=params.resource,
+        )
+        log.info("OAuth: issued auth code for client %s", client.client_id[:8])
+        return construct_redirect_uri(
+            str(params.redirect_uri), code=code, state=params.state,
+        )
+
+    async def load_authorization_code(
+        self,
+        client: OAuthClientInformationFull,
+        authorization_code: str,
+    ) -> Optional[AuthorizationCode]:
+        ac = self.auth_codes.get(authorization_code)
+        if ac and ac.expires_at < time.time():
+            self.auth_codes.pop(authorization_code, None)
+            return None
+        return ac
+
+    async def exchange_authorization_code(
+        self,
+        client: OAuthClientInformationFull,
+        authorization_code: AuthorizationCode,
+    ) -> OAuthToken:
+        self.auth_codes.pop(authorization_code.code, None)
+        access = secrets.token_urlsafe(32)
+        refresh = secrets.token_urlsafe(32)
+        now = int(time.time())
+        self.access_tokens[access] = AccessToken(
+            token=access,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=now + 3600,
+            resource=authorization_code.resource,
+        )
+        self.refresh_tokens[refresh] = RefreshToken(
+            token=refresh,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes,
+            expires_at=now + 86400 * 30,
+        )
+        log.info("OAuth: issued access+refresh tokens for client %s", client.client_id[:8])
+        return OAuthToken(
+            access_token=access,
+            token_type="Bearer",
+            expires_in=3600,
+            scope=" ".join(authorization_code.scopes) if authorization_code.scopes else None,
+            refresh_token=refresh,
+        )
+
+    async def load_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: str,
+    ) -> Optional[RefreshToken]:
+        rt = self.refresh_tokens.get(refresh_token)
+        if rt and rt.expires_at and rt.expires_at < time.time():
+            self.refresh_tokens.pop(refresh_token, None)
+            return None
+        return rt
+
+    async def exchange_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshToken,
+        scopes: list[str],
+    ) -> OAuthToken:
+        self.refresh_tokens.pop(refresh_token.token, None)
+        access = secrets.token_urlsafe(32)
+        new_refresh = secrets.token_urlsafe(32)
+        now = int(time.time())
+        granted = scopes or refresh_token.scopes
+        self.access_tokens[access] = AccessToken(
+            token=access,
+            client_id=client.client_id,
+            scopes=granted,
+            expires_at=now + 3600,
+            resource=None,
+        )
+        self.refresh_tokens[new_refresh] = RefreshToken(
+            token=new_refresh,
+            client_id=client.client_id,
+            scopes=refresh_token.scopes,
+            expires_at=now + 86400 * 30,
+        )
+        return OAuthToken(
+            access_token=access,
+            token_type="Bearer",
+            expires_in=3600,
+            scope=" ".join(granted) if granted else None,
+            refresh_token=new_refresh,
+        )
+
+    async def load_access_token(self, token: str) -> Optional[AccessToken]:
+        at = self.access_tokens.get(token)
+        if at and at.expires_at and at.expires_at < time.time():
+            self.access_tokens.pop(token, None)
+            return None
+        return at
+
+    async def revoke_token(
+        self,
+        client: OAuthClientInformationFull,
+        token: AccessToken | RefreshToken,
+    ) -> None:
+        if isinstance(token, AccessToken):
+            self.access_tokens.pop(token.token, None)
+        elif isinstance(token, RefreshToken):
+            self.refresh_tokens.pop(token.token, None)
+
+
+# ---------------------------------------------------------------------------
+# Allowed hosts/origins for transport security (DNS rebinding protection)
+# ---------------------------------------------------------------------------
 ALLOWED_HOSTS = [
     h.strip() for h in os.environ.get(
         "MCP_PB_ALLOWED_HOSTS",
-        # The bare hostname (port 443) is what claude.ai will hit through the
-        # Tailscale Funnel `/mcp` path. :10000 stays as a fallback for direct
-        # curl debugging.
         "dashboard-server.tail4cfa2.ts.net,"
         "dashboard-server.tail4cfa2.ts.net:443,"
-        "dashboard-server.tail4cfa2.ts.net:10000,"
         "127.0.0.1:*,localhost:*"
     ).split(",") if h.strip()
 ]
@@ -137,27 +289,44 @@ ALLOWED_ORIGINS = [
     o.strip() for o in os.environ.get(
         "MCP_PB_ALLOWED_ORIGINS",
         "https://dashboard-server.tail4cfa2.ts.net,"
-        "https://dashboard-server.tail4cfa2.ts.net:10000,"
         "http://127.0.0.1:*,http://localhost:*"
     ).split(",") if o.strip()
 ]
 
-mcp = FastMCP("pocketbase")
+
+# ---------------------------------------------------------------------------
+# Configure FastMCP with the OAuth provider
+# ---------------------------------------------------------------------------
+provider = InMemoryOAuthProvider()
+mcp = FastMCP(
+    "pocketbase",
+    auth_server_provider=provider,
+    auth=AuthSettings(
+        issuer_url=AnyHttpUrl(PUBLIC_URL),
+        resource_server_url=AnyHttpUrl(PUBLIC_URL),
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True,
+            valid_scopes=["mcp"],
+            default_scopes=["mcp"],
+        ),
+        revocation_options=RevocationOptions(enabled=True),
+        required_scopes=["mcp"],
+    ),
+)
 mcp.settings.transport_security.allowed_hosts = ALLOWED_HOSTS
 mcp.settings.transport_security.allowed_origins = ALLOWED_ORIGINS
-# Serve MCP at root path. Tailscale Funnel strips the `--set-path=/mcp` prefix
-# before forwarding to us, so the public URL `https://host/mcp` arrives here
-# as `/`. Make FastMCP's mount match.
+# Tailscale Funnel strips `/mcp` before forwarding; serve MCP at app root.
 mcp.settings.streamable_http_path = "/"
 
 
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
 @mcp.tool()
 def pb_list_collections() -> dict:
     """List all PocketBase collections with their fields and (for select fields)
     valid values. Call this at the start of a Smart Note conversation so you
     know the current schema and pick the right collection / select option.
-
-    Returns: {collections: [{name, fields: [{name, type, ...}]}]}
     """
     data = _pb("GET", "/api/collections?perPage=100")
     out = []
@@ -196,12 +365,8 @@ def pb_search(
       - title~'idea'           (~ = LIKE)
       - date >= '2026-01-01'
 
-    Sort: comma list of fields; prefix `-` for desc. e.g. '-date,title'.
-
-    Expand: comma list of relation field names whose target records you want
-    embedded (e.g. 'trip,location' on days).
-
-    Returns: {items: [...], page, totalItems, totalPages}
+    Sort: comma list with `-` prefix for desc. e.g. '-date,title'.
+    Expand: comma list of relation field names whose target records you want embedded.
     """
     params = []
     if filter:
@@ -239,7 +404,6 @@ def pb_update(collection: str, id: str, data: dict) -> dict:
 
     Common patterns:
       - Archive: pb_update(coll, id, {"status": "Archived"})
-        (or {"archived": true} for tables with a checkbox)
       - Mark todo done: pb_update("todos", id, {"status": "Done", "completed_at": "2026-05-27"})
     """
     return _pb("PATCH", f"/api/collections/{collection}/records/{id}", body=data)
@@ -247,10 +411,8 @@ def pb_update(collection: str, id: str, data: dict) -> dict:
 
 @mcp.tool()
 def smartnote_open_context() -> dict:
-    """Convenience: fetch active high-priority memos from `claude_memos`.
-    Call at the start of a Smart Note conversation to recover persistent
-    context (decisions, project state, conventions). Equivalent to:
-      pb_search('claude_memos', "status='Active' && priority='High'", '-date', '', 1, 50)
+    """Fetch active high-priority memos from `claude_memos`. Call at the start
+    of a Smart Note conversation to recover persistent context.
     """
     f = urllib.parse.quote("status='Active' && priority='High'", safe="")
     return _pb("GET",
@@ -258,37 +420,33 @@ def smartnote_open_context() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Bearer auth middleware
-# ---------------------------------------------------------------------------
-class BearerAuth(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.url.path in ("/health", "/healthz"):
-            return await call_next(request)
-        auth = request.headers.get("authorization", "")
-        if not auth.startswith("Bearer "):
-            return JSONResponse({"error": "missing Bearer token"}, status_code=401)
-        if not secrets.compare_digest(auth[7:].strip(), MCP_TOKEN):
-            log.warning("rejected bearer from %s",
-                        request.client.host if request.client else "?")
-            return JSONResponse({"error": "invalid token"}, status_code=401)
-        return await call_next(request)
-
-
-# ---------------------------------------------------------------------------
 # Wire up & run
 # ---------------------------------------------------------------------------
 app = mcp.streamable_http_app()
-app.add_middleware(BearerAuth)
 
 
 async def health(request: Request):  # noqa: ARG001
     return JSONResponse({"ok": True, "server": "mcp_pb"})
 
 
+async def oauth_protected_resource(request: Request):  # noqa: ARG001
+    """RFC 9728: lets a client discover which authorization server protects
+    this MCP resource. claude.ai probes this before doing OAuth."""
+    return JSONResponse({
+        "resource": PUBLIC_URL,
+        "authorization_servers": [PUBLIC_URL],
+        "scopes_supported": ["mcp"],
+        "bearer_methods_supported": ["header"],
+    })
+
+
 app.add_route("/health", health, methods=["GET"])
+app.add_route("/.well-known/oauth-protected-resource",
+              oauth_protected_resource, methods=["GET"])
 
 
 if __name__ == "__main__":
     import uvicorn
-    log.info("starting mcp_pb on %s:%d (PB=%s)", LISTEN_HOST, LISTEN_PORT, PB_URL)
+    log.info("starting mcp_pb on %s:%d (PB=%s, public=%s)",
+             LISTEN_HOST, LISTEN_PORT, PB_URL, PUBLIC_URL)
     uvicorn.run(app, host=LISTEN_HOST, port=LISTEN_PORT, log_level="info")
