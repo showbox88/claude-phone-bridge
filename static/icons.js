@@ -47,6 +47,9 @@
     // brand mark — Claude sparkle
     sparkle: SVG_FILL('<path d="M12 2 L13 9.5 L21 11 L13 12.5 L12 21 L11 12.5 L3 11 L11 9.5 Z"/>'),
 
+    // location / checkin
+    pin:     SVG('<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>'),
+
     // tool indicators
     tool:    SVG('<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>'),
     play:    SVG_FILL('<polygon points="6 4 20 12 6 20 6 4"/>'),

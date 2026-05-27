@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=21">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -102,6 +102,30 @@
       </div>
     </main>
 
+    <!-- Floating Action Button: Check-in.
+         Composes a minimal ```checkin``` fenced block and sends it as a normal
+         chat message. Backend (server.py + CHECKIN.md) handles the rest. -->
+    <button id="checkin-fab" class="fab fab-checkin" type="button"
+            aria-label="打卡" title="打卡" data-icon="pin" data-icon-size="22"></button>
+
+    <!-- Check-in dialog: shown after FAB click + GPS fix to pick a POI. -->
+    <dialog id="checkin-dialog" class="checkin-dialog">
+      <form method="dialog" class="cd-form">
+        <header class="cd-head">
+          <span class="cd-title">打卡</span>
+          <span id="cd-status" class="cd-status">正在定位…</span>
+          <button class="icon-btn" value="cancel" type="submit"
+                  aria-label="取消" data-icon="close"></button>
+        </header>
+        <div id="cd-list" class="cd-list" role="list"></div>
+        <div class="cd-manual">
+          <input id="cd-manual-name" type="text" placeholder="自己输入名字…"
+                 autocomplete="off" maxlength="60">
+          <button id="cd-manual-go" class="cd-go" type="button">用这个</button>
+        </div>
+      </form>
+    </dialog>
+
     <footer class="composer">
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
@@ -137,8 +161,8 @@
     </footer>
   </div>
 
-  <script src="/static/icons.js?v=15"></script>
+  <script src="/static/icons.js?v=21"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=21"></script>
 </body>
 </html>

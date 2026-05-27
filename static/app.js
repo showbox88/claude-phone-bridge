@@ -813,6 +813,257 @@
   });
   sendBtn.addEventListener('click', sendCurrent);
 
+  // ---------- check-in FAB (Phase 2 Step 1: prompt-only minimum) ----------
+  // Composes a minimal ```checkin``` fenced block and sends it as a normal
+  // user_message. Server-side CHECKIN.md instructs Claude to parse + write
+  // PocketBase. Later steps swap the prompt for a real geo/POI modal.
+  function isoNowWithOffset() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const tz = -d.getTimezoneOffset();
+    const sign = tz >= 0 ? '+' : '-';
+    const tzh = pad(Math.floor(Math.abs(tz) / 60));
+    const tzm = pad(Math.abs(tz) % 60);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T`
+         + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+         + `${sign}${tzh}:${tzm}`;
+  }
+
+  function buildCheckinBlock(fields) {
+    // fields: {name, build_location?, activity_type?, amount?, currency?, rate?,
+    //         score?, note?, gps?: [lat,lng], accuracy_m?, osm_id?, amap_poi_id?,
+    //         type?, city?, address?}
+    const lines = ['```checkin'];
+    lines.push(`when: ${isoNowWithOffset()}`);
+    if (fields.gps) {
+      lines.push(`gps: [${fields.gps[0]}, ${fields.gps[1]}]`);
+      if (fields.accuracy_m != null) lines.push(`accuracy_m: ${fields.accuracy_m}`);
+    }
+    if (fields.name) {
+      lines.push('selected_poi:');
+      lines.push(`  name: ${fields.name}`);
+      if (fields.osm_id)      lines.push(`  osm_id: ${fields.osm_id}`);
+      if (fields.amap_poi_id) lines.push(`  amap_poi_id: ${fields.amap_poi_id}`);
+      if (fields.type)        lines.push(`  type: ${fields.type}`);
+      if (fields.city)        lines.push(`  city: ${fields.city}`);
+      if (fields.address)     lines.push(`  address: ${fields.address}`);
+    }
+    lines.push(`build_location: ${fields.build_location === false ? 'false' : 'true'}`);
+    if (fields.activity_type) lines.push(`activity_type: ${fields.activity_type}`);
+    if (fields.amount != null) lines.push(`amount: ${fields.amount}`);
+    if (fields.currency) lines.push(`currency: ${fields.currency}`);
+    if (fields.rate != null) lines.push(`rate: ${fields.rate}`);
+    if (fields.score != null) lines.push(`score: ${fields.score}`);
+    if (fields.note) lines.push(`note: ${fields.note}`);
+    lines.push('```');
+    return lines.join('\n');
+  }
+
+  function sendCheckin(fields) {
+    const block = buildCheckinBlock(fields);
+    const ok = send({ type: 'user_message', text: block, images: [], files: [] });
+    if (!ok) return false;
+    setResponding(true);
+    return true;
+  }
+
+  // Step 2: geolocation cache + async fetch.
+  // Per CHECKIN.md the server uses `gps` to dedupe Locations within 100m.
+  // We cache the last fix in localStorage so a second click within 30 min is
+  // instant; in parallel we kick off a fresh high-accuracy request whose
+  // result lands in cache for next time.
+  const GPS_CACHE_KEY = 'bridge.lastGps';
+  const GPS_CACHE_TTL_MS = 30 * 60 * 1000;
+
+  function loadCachedGps() {
+    try {
+      const raw = localStorage.getItem(GPS_CACHE_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || typeof o.lat !== 'number' || typeof o.lng !== 'number') return null;
+      if (Date.now() - (o.t || 0) > GPS_CACHE_TTL_MS) return null;
+      return o;
+    } catch (_) { return null; }
+  }
+
+  function saveCachedGps(lat, lng, accuracy_m) {
+    try {
+      localStorage.setItem(GPS_CACHE_KEY, JSON.stringify({
+        lat, lng, accuracy_m, t: Date.now(),
+      }));
+    } catch (_) { /* quota or disabled — silent */ }
+  }
+
+  function requestGps(timeoutMs = 8000) {
+    return new Promise((resolve) => {
+      if (!('geolocation' in navigator)) return resolve(null);
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const acc = Math.round(pos.coords.accuracy || 0);
+          saveCachedGps(lat, lng, acc);
+          finish({ lat, lng, accuracy_m: acc });
+        },
+        () => finish(null),
+        { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60000 },
+      );
+    });
+  }
+
+  // Step 3: POI picker dialog backed by /api/poi/around.
+  async function searchNearby(lat, lng, radius = 300) {
+    try {
+      const r = await fetch(apiUrl(`/api/poi/around?lat=${lat}&lng=${lng}&radius=${radius}`));
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data.pois) ? data.pois : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  const checkinDialog = $('checkin-dialog');
+  const cdStatus = $('cd-status');
+  const cdList = $('cd-list');
+  const cdManualName = $('cd-manual-name');
+  const cdManualGo = $('cd-manual-go');
+
+  // Dialog-close listener: clear contents so next open starts fresh.
+  if (checkinDialog) {
+    checkinDialog.addEventListener('close', () => {
+      cdList.innerHTML = '';
+      cdManualName.value = '';
+      cdStatus.textContent = '正在定位…';
+      cdStatus.className = 'cd-status';
+    });
+  }
+
+  function renderPoiList(pois, gps) {
+    cdList.innerHTML = '';
+    if (!pois.length) {
+      cdList.innerHTML = '<div class="cd-empty">附近没找到 POI<br><small>输入下方名字手动打卡</small></div>';
+      return;
+    }
+    for (const p of pois) {
+      const row = document.createElement('div');
+      row.className = 'cd-row ' + (p.source || '');
+      row.setAttribute('role', 'listitem');
+      const pinIcon = (window.icon && window.icon('pin', 18)) || '📍';
+      const meta = [p.type, p.city, p.address].filter(Boolean).join(' · ');
+      row.innerHTML = `
+        <span class="cd-icon">${pinIcon}</span>
+        <div class="cd-main">
+          <span class="cd-name"></span>
+          <span class="cd-meta"><span class="cd-dist"></span><span class="cd-meta-info"></span></span>
+        </div>
+      `;
+      row.querySelector('.cd-name').textContent = p.name;
+      row.querySelector('.cd-dist').textContent = `${p.distance_m}m`;
+      row.querySelector('.cd-meta-info').textContent = meta || (p.source === 'osm' ? 'OSM' : '');
+      row.addEventListener('click', () => {
+        const fields = {
+          name: p.name,
+          build_location: true,
+        };
+        if (gps) {
+          fields.gps = [gps.lat, gps.lng];
+          if (gps.accuracy_m != null) fields.accuracy_m = gps.accuracy_m;
+        }
+        if (p.osm_id) fields.osm_id = p.osm_id;
+        if (p.amap_poi_id) fields.amap_poi_id = p.amap_poi_id;
+        if (p.type) fields.type = p.type;
+        if (p.city) fields.city = p.city;
+        if (p.address) fields.address = p.address;
+        sendCheckin(fields);
+        checkinDialog.close();
+      });
+      cdList.appendChild(row);
+    }
+  }
+
+  function sendManualCheckin(gps) {
+    const raw = cdManualName.value.trim();
+    if (!raw) {
+      cdManualName.focus();
+      return;
+    }
+    const fields = { name: raw, build_location: true };
+    if (gps) {
+      fields.gps = [gps.lat, gps.lng];
+      if (gps.accuracy_m != null) fields.accuracy_m = gps.accuracy_m;
+    }
+    sendCheckin(fields);
+    checkinDialog.close();
+  }
+
+  async function openCheckinDialog() {
+    if (!checkinDialog || !checkinDialog.showModal) {
+      // Fallback for ancient browsers — keep the Step 2 behaviour alive.
+      const name = prompt('打卡店名 / 地点:');
+      if (name && name.trim()) {
+        const cached = loadCachedGps();
+        const fields = { name: name.trim(), build_location: true };
+        if (cached) { fields.gps = [cached.lat, cached.lng]; fields.accuracy_m = cached.accuracy_m; }
+        sendCheckin(fields);
+      }
+      return;
+    }
+
+    // Reset + open.
+    cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>正在定位…</div>';
+    cdStatus.textContent = '正在定位…';
+    cdStatus.className = 'cd-status';
+    cdManualName.value = '';
+    checkinDialog.showModal();
+
+    // Wire manual-entry button to current GPS context.
+    let currentGps = loadCachedGps();
+    const onManualGo = () => sendManualCheckin(currentGps);
+    cdManualGo.onclick = onManualGo;
+    cdManualName.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); onManualGo(); }
+    };
+
+    // If we have a fresh-enough cached fix, show POIs immediately.
+    if (currentGps) {
+      cdStatus.textContent = `已有缓存定位 · 刷新中`;
+      cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
+      const pois = await searchNearby(currentGps.lat, currentGps.lng);
+      if (checkinDialog.open) renderPoiList(pois, currentGps);
+    }
+
+    // Get a fresh fix in the background; if it differs meaningfully, re-render.
+    const fresh = await requestGps(10000);
+    if (!checkinDialog.open) return; // user closed before GPS came
+
+    if (!fresh) {
+      if (!currentGps) {
+        cdStatus.textContent = '无法获取位置 — 可手动输入';
+        cdStatus.className = 'cd-status error';
+        cdList.innerHTML = '<div class="cd-empty">没有定位信息<br><small>可在下方手动输入打卡名</small></div>';
+      } else {
+        cdStatus.textContent = `位置 (缓存) · acc ${currentGps.accuracy_m}m`;
+        cdStatus.className = 'cd-status';
+      }
+      return;
+    }
+
+    currentGps = fresh;
+    cdStatus.textContent = `位置 · acc ${fresh.accuracy_m}m`;
+    cdStatus.className = 'cd-status ready';
+    cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
+    const pois = await searchNearby(fresh.lat, fresh.lng);
+    if (checkinDialog.open) renderPoiList(pois, fresh);
+  }
+
+  const checkinFab = $('checkin-fab');
+  if (checkinFab) {
+    checkinFab.addEventListener('click', openCheckinDialog);
+  }
+
   // ---------- top menu ----------
   menuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
