@@ -146,6 +146,18 @@ class InMemoryOAuthProvider(OAuthAuthorizationServerProvider):
         return self.clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        # RFC 7591 §3.2.1 makes `client_secret_expires_at` REQUIRED when a
+        # client_secret is issued (0 = never expires). The SDK leaves it None
+        # unless ClientRegistrationOptions.client_secret_expiry_seconds is
+        # set, but None serializes as omitted — and claude.ai (rightly)
+        # rejects the registration response in that case with
+        # "Couldn't register with sign-in service".
+        #
+        # We mutate the inbound object in-place; the SDK's RegistrationHandler
+        # serializes this same object as the 201 body, so the fix lands in
+        # the wire response.
+        if client_info.client_secret and client_info.client_secret_expires_at is None:
+            client_info.client_secret_expires_at = 0
         self.clients[client_info.client_id] = client_info
         log.info("OAuth: registered client %s", client_info.client_id[:8])
 
