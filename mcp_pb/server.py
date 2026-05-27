@@ -422,6 +422,68 @@ def pb_update(collection: str, id: str, data: dict) -> dict:
 
 
 @mcp.tool()
+def pb_create_collection(name: str, fields: list, type: str = "base") -> dict:
+    """Create a new PocketBase collection (table).
+
+    `fields` is a list of field-spec dicts. Each spec needs at minimum
+    `name` and `type`. Common types and their extra keys:
+      - text:     {"name":"title","type":"text","required":true,"max":200}
+      - editor:   {"name":"content","type":"editor"}                       (markdown)
+      - number:   {"name":"qty","type":"number","required":false}
+      - bool:     {"name":"done","type":"bool"}
+      - date:     {"name":"due_date","type":"date"}
+      - email/url:{"name":"email","type":"email"}
+      - select:   {"name":"status","type":"select","maxSelect":1,
+                   "values":["Active","Archived"]}
+      - relation: {"name":"plan","type":"relation","collectionId":"<id>",
+                   "maxSelect":1,"cascadeDelete":false}
+      - json:     {"name":"raw","type":"json"}
+      - file:     {"name":"attach","type":"file","maxSelect":3}
+
+    Note: PocketBase auto-adds `id`, `created`, `updated` system fields.
+    Returns the created collection record (with its new id).
+    Use `pb_list_collections()` afterwards if you need to confirm.
+    """
+    body = {"name": name, "type": type, "fields": fields}
+    return _pb("POST", "/api/collections", body=body)
+
+
+@mcp.tool()
+def pb_update_collection(id_or_name: str, patch: dict) -> dict:
+    """Patch an existing collection (rename, add/remove/modify fields, add
+    indexes, change listRule/viewRule/etc). `patch` is merged onto current
+    collection definition.
+
+    To add a field: include the FULL fields array (existing + new) in patch.
+    Existing fields keep their data; new fields default to null for old rows.
+    To change a select field's allowed values: replace its `values` array.
+
+    Example - add new field to an existing collection:
+      cur = pb_get_collection("ideas")
+      new_fields = cur["fields"] + [{"name":"priority","type":"select",
+                                     "values":["Low","High"],"maxSelect":1}]
+      pb_update_collection("ideas", {"fields": new_fields})
+    """
+    return _pb("PATCH", f"/api/collections/{id_or_name}", body=patch)
+
+
+@mcp.tool()
+def pb_delete_collection(id_or_name: str) -> dict:
+    """Delete a collection AND all its records. Irreversible. Use only when
+    explicitly asked by the user. Returns {"ok": true} on success."""
+    _pb("DELETE", f"/api/collections/{id_or_name}")
+    return {"ok": True, "deleted": id_or_name}
+
+
+@mcp.tool()
+def pb_get_collection(id_or_name: str) -> dict:
+    """Fetch the full definition of one collection (all fields with their
+    raw config). Use before `pb_update_collection` to read the current
+    field array, then mutate and patch it back."""
+    return _pb("GET", f"/api/collections/{id_or_name}")
+
+
+@mcp.tool()
 def smartnote_open_context() -> dict:
     """Fetch active high-priority memos from `claude_memos`. Call at the start
     of a Smart Note conversation to recover persistent context.
@@ -435,6 +497,32 @@ def smartnote_open_context() -> dict:
 # Wire up & run
 # ---------------------------------------------------------------------------
 app = mcp.streamable_http_app()
+
+
+# Debug middleware: log the full request/response body for /register so we
+# can see exactly what claude.ai is sending and what we return.
+from starlette.middleware.base import BaseHTTPMiddleware
+class RegisterDebugLogger(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.url.path != "/register":
+            return await call_next(request)
+        body = await request.body()
+        log.info("REGISTER REQ from %s body=%s", request.client.host if request.client else "?", body.decode("utf-8", "replace")[:1000])
+        # Re-attach body since reading consumed it
+        async def receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+        request._receive = receive
+        resp = await call_next(request)
+        # Read response body
+        chunks = []
+        async for c in resp.body_iterator:
+            chunks.append(c)
+        resp_body = b"".join(chunks)
+        log.info("REGISTER RESP status=%d body=%s", resp.status_code, resp_body.decode("utf-8", "replace")[:1000])
+        from starlette.responses import Response as StResponse
+        return StResponse(content=resp_body, status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+
+app.add_middleware(RegisterDebugLogger)
 
 
 async def health(request: Request):  # noqa: ARG001

@@ -665,6 +665,14 @@ _PUBLIC_PREFIXES = ("/login", "/logout", "/setup", "/static/")
 _PUBLIC_EXACT = {
     "/sw.js", "/manifest.json", "/icon.svg",
     "/api/health", "/api/vapid-public-key",
+    # RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling service.
+    # Phone-bridge owns the root-path Tailscale Funnel mapping; mcp_pb's
+    # public URL is /mcp on the same hostname. claude.ai's connector probes
+    # this well-known URL during OAuth discovery before doing DCR.
+    "/.well-known/oauth-protected-resource/mcp",
+    # RFC 8414 path-suffixed authorization-server metadata. claude.ai's
+    # connector tries this URL (not /mcp/.well-known/...) to find OAuth endpoints.
+    "/.well-known/oauth-authorization-server/mcp",
 }
 
 
@@ -1005,6 +1013,42 @@ async def api_health(request: Request):
         "model": state.model or "",
     })
     return base
+
+
+@app.get("/.well-known/oauth-protected-resource/mcp")
+async def mcp_oauth_resource_metadata():
+    """RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling
+    service. claude.ai's Custom Connector probes this during OAuth discovery
+    before DCR. Phone-bridge owns root-path Funnel; mcp_pb is at /mcp."""
+    return {
+        "resource": "https://dashboard-server.tail4cfa2.ts.net/mcp",
+        "authorization_servers": ["https://dashboard-server.tail4cfa2.ts.net/mcp"],
+        "scopes_supported": ["mcp"],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+@app.get("/.well-known/oauth-authorization-server/mcp")
+async def mcp_oauth_authorization_server_metadata():
+    """RFC 8414 authorization-server metadata for issuer https://host/mcp.
+    Per RFC 8414, metadata for an issuer with path component lives at
+    /.well-known/oauth-authorization-server/<issuer-path>, which falls on the
+    root-path Funnel (phone-bridge), not on /mcp. Endpoints below are under
+    /mcp/* so they reach mcp_pb."""
+    base = "https://dashboard-server.tail4cfa2.ts.net/mcp"
+    return {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
+        "revocation_endpoint": f"{base}/revoke",
+        "scopes_supported": ["mcp"],
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+        "revocation_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+        "code_challenge_methods_supported": ["S256"],
+    }
 
 
 # ---------- REST: VAPID/push ----------
