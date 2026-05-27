@@ -66,15 +66,26 @@ WantedBy=multi-user.target
 
 ## Migrations
 
+12 张表覆盖整个 Smart Note 子系统（不只是行程·地点·消费）。
+
 | 文件 | Collection | 字段亮点 |
 |---|---|---|
-| `1779465601_create_trips.js` | trips | title / date_start-end / status / type |
+| `1779465601_create_trips.js` | trips | title / date_start-end / status / type / budget |
 | `1779465602_create_locations.js` | locations | name / type / rating(⭐) / **lat / lng / osm_id / amap_poi_id (后两者 unique idx)** |
 | `1779465603_create_days.js` | days | date / amount / currency / rate / amount_usd / score(0-10) / trip-rel / location-rel / **actual_lat / actual_lng** |
 | `1779465604_create_foods.js` | foods | dish / rating(❤️) / flavor(multi) / location-rel |
-| `1779465605_create_journal.js` | journal | title / mood / type / tags(multi) / related_trip / related_day |
+| `1779465605_create_journal.js` | journal | title / mood / type / tags(multi) / related_trip / related_day / **content (editor)** |
+| `1779465606_extend_existing.js` | trips/locations/days/foods | **content (editor)** + locations 加 **fsq_id (unique)** |
+| `1779465607_create_contacts.js` | contacts | name / email / phone / relationship / birthday / last_contact |
+| `1779465608_create_todos.js` | todos | title / due_date / priority / status / executor / executor_ref_id |
+| `1779465609_create_daily_briefing.js` | daily_briefing | title / date / type / status + 3 数字字段 + content |
+| `1779465610_create_claude_memos.js` | claude_memos | title / category / priority / status / content |
+| `1779465611_create_transactions.js` | transactions | description / amount / type / category / card / confirmation (unique on Gmail-source) |
+| `1779465612_create_ideas.js` | ideas | title / category / status / tags + **self-relation `related_ideas`** (两步保存) |
+| `1779465613_create_plans.js` | plans | title / category / progress / target_date + relation→ideas |
+| `1779465614_link_trips_to_plans_contacts.js` | (alter trips) | 加 **`related_plan`→plans** + **`companions`→contacts (多选)** |
 
-**Schema 来源**：1:1 翻译自 Notion 同名库（架构页：[行程·地点·消费子系统](https://www.notion.so/36bacd0fbb898156899bed03be59be63)），加上打卡需要的新字段。
+**Schema 来源**：1:1 翻译自 Notion 各同名库（[Smart Note 总入口](https://www.notion.so/369acd0fbb8980c8ac72fdab06e709c4)）。Notion 的 rollups（反向 relation 聚合）不存储；Day.Amount(USD) 公式用 `pb_hooks/days.pb.js` 替代。Notion page body 都映射到目标表的 `content` (editor) 字段。
 
 ## Hooks
 
