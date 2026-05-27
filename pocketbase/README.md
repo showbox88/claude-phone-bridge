@@ -1,0 +1,96 @@
+# PocketBase Backend for Smart Note
+
+本地 PocketBase 是 Smart Note 子系统（行程 / 地点 / 消费 / 打卡 / 美食 / 日记）的**唯一真相源**。Notion 现在角色降级为只读归档（单向 sync，未实现），日常浏览/编辑都该走 PocketBase admin UI。
+
+## 当前部署（2026-05-27 上线）
+
+| 项 | 值 |
+|---|---|
+| 主机 | `dashboard-server` (Debian 12, x86_64) |
+| PB 版本 | v0.38.2 |
+| 二进制 | `/opt/pocketbase/pocketbase` |
+| 数据 | `/opt/pocketbase/pb_data/` |
+| Service | `pocketbase.service` (systemd, User=dev, listens 127.0.0.1:8090) |
+| 公网入口 | `https://dashboard-server.tail4cfa2.ts.net:8450/_/`（Tailscale Serve, tailnet only）|
+| Service account | `sdk@phone-bridge.local`（密码在 `/home/dev/phone-bridge/.env` 的 `POCKETBASE_ADMIN_PASSWORD`）|
+
+## 复制部署的步骤（从零到能用）
+
+```bash
+# 1. 下载二进制
+sudo mkdir -p /opt/pocketbase/pb_data /opt/pocketbase/pb_migrations /opt/pocketbase/pb_hooks
+sudo chown -R dev:dev /opt/pocketbase
+cd /opt/pocketbase
+curl -fLO https://github.com/pocketbase/pocketbase/releases/download/v0.38.2/pocketbase_0.38.2_linux_amd64.zip
+python3 -c "import zipfile; zipfile.ZipFile('pocketbase_0.38.2_linux_amd64.zip').extract('pocketbase', '.')"
+chmod +x pocketbase
+rm pocketbase_0.38.2_linux_amd64.zip
+
+# 2. 拷贝 migrations + hooks（从本 repo）
+cp pb_migrations/*.js /opt/pocketbase/pb_migrations/
+cp pb_hooks/days.pb.js /opt/pocketbase/pb_hooks/
+
+# 3. systemd unit（写到 /etc/systemd/system/pocketbase.service，见下方）
+
+# 4. 启动并创建首个 superuser
+sudo systemctl enable --now pocketbase
+sudo journalctl -u pocketbase --no-pager | grep pbinstall  # 取 install URL，浏览器开建 admin
+
+# 5. 创建专用 service account 给 SDK 用
+/opt/pocketbase/pocketbase superuser upsert sdk@phone-bridge.local '<strong-password>'
+
+# 6. Tailscale Serve 暴露 admin UI 到 tailnet
+sudo tailscale serve --bg --https=8450 http://localhost:8090
+```
+
+## systemd unit (`/etc/systemd/system/pocketbase.service`)
+
+```ini
+[Unit]
+Description=PocketBase backend for Smart Note
+After=network.target
+
+[Service]
+Type=simple
+User=dev
+Group=dev
+WorkingDirectory=/opt/pocketbase
+ExecStart=/opt/pocketbase/pocketbase serve --http=127.0.0.1:8090
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Migrations
+
+| 文件 | Collection | 字段亮点 |
+|---|---|---|
+| `1779465601_create_trips.js` | trips | title / date_start-end / status / type |
+| `1779465602_create_locations.js` | locations | name / type / rating(⭐) / **lat / lng / osm_id / amap_poi_id (后两者 unique idx)** |
+| `1779465603_create_days.js` | days | date / amount / currency / rate / amount_usd / score(0-10) / trip-rel / location-rel / **actual_lat / actual_lng** |
+| `1779465604_create_foods.js` | foods | dish / rating(❤️) / flavor(multi) / location-rel |
+| `1779465605_create_journal.js` | journal | title / mood / type / tags(multi) / related_trip / related_day |
+
+**Schema 来源**：1:1 翻译自 Notion 同名库（架构页：[行程·地点·消费子系统](https://www.notion.so/36bacd0fbb898156899bed03be59be63)），加上打卡需要的新字段。
+
+## Hooks
+
+`pb_hooks/days.pb.js`：替代 Notion 的 `Amount(USD)` formula。在 days 记录 create/update 时自动算 `amount_usd = amount * rate`（rate 空时 = amount 本身），保留 2 位小数。
+
+⚠️ **PB v0.38 JS hook 坑**：每个 callback 跑在独立 goja VM，顶层 function 不共享。helper 必须**内联到每个 hook 内部**，不能抽顶层 function 复用（症状是静默失败 + 无日志）。
+
+## 跟 phone-bridge 的集成
+
+`server.py` 启动时认证一次，得到 token 存到 `os.environ["PB_TOKEN"]`，每 30 分钟后台 refresh。Claude SDK 在 chat/code 模式都用 Bash + curl 调本地 PB。
+
+打卡处理流程详见根目录 [`CHECKIN.md`](../CHECKIN.md)。
+
+## 备份策略（待办）
+
+PB 数据是 SQLite 单文件 (`pb_data/data.db`)，备份简单：
+- 短期：`cp data.db backups/data.$(date +%F).db` cron 每日
+- 中期：Litestream 流式复制到 S3-like 存储
+- 长期：等 Notion sync 上线后，Notion 本身也是备份（虽然 schema 有损）
