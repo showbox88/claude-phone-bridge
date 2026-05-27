@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=21">
+  <link rel="stylesheet" href="/static/style.css?v=24">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -111,18 +111,84 @@
     <!-- Check-in dialog: shown after FAB click + GPS fix to pick a POI. -->
     <dialog id="checkin-dialog" class="checkin-dialog">
       <form method="dialog" class="cd-form">
-        <header class="cd-head">
-          <span class="cd-title">打卡</span>
-          <span id="cd-status" class="cd-status">正在定位…</span>
-          <button class="icon-btn" value="cancel" type="submit"
-                  aria-label="取消" data-icon="close"></button>
-        </header>
-        <div id="cd-list" class="cd-list" role="list"></div>
-        <div class="cd-manual">
-          <input id="cd-manual-name" type="text" placeholder="自己输入名字…"
-                 autocomplete="off" maxlength="60">
-          <button id="cd-manual-go" class="cd-go" type="button">用这个</button>
-        </div>
+
+        <!-- Stage 1: pick a nearby POI or type a name -->
+        <section id="cd-stage-list" class="cd-stage">
+          <header class="cd-head">
+            <span class="cd-title">打卡</span>
+            <span id="cd-status" class="cd-status">正在定位…</span>
+            <button class="icon-btn" value="cancel" type="submit"
+                    aria-label="取消" data-icon="close"></button>
+          </header>
+          <div id="cd-list" class="cd-list" role="list"></div>
+          <div class="cd-manual">
+            <input id="cd-manual-name" type="text" placeholder="自己输入名字…"
+                   autocomplete="off" maxlength="60">
+            <button id="cd-manual-go" class="cd-go" type="button">下一步</button>
+          </div>
+        </section>
+
+        <!-- Stage 2: fill in optional fields (activity / amount / score / note) -->
+        <section id="cd-stage-form" class="cd-stage hidden">
+          <header class="cd-head">
+            <button id="cd-back" type="button" class="icon-btn"
+                    aria-label="返回" data-icon="back"></button>
+            <div class="cd-title-stack">
+              <span id="cd-form-name" class="cd-title">店名</span>
+              <span id="cd-form-meta" class="cd-status"></span>
+            </div>
+            <button class="icon-btn" value="cancel" type="submit"
+                    aria-label="取消" data-icon="close"></button>
+          </header>
+          <div class="cd-fields">
+            <div class="cd-field">
+              <label class="cd-label">类型</label>
+              <div class="cd-chips" id="cd-activity">
+                <button type="button" data-val="用餐">🍴 用餐</button>
+                <button type="button" data-val="休息">☕ 休息</button>
+                <button type="button" data-val="购物">🛍 购物</button>
+                <button type="button" data-val="景点观光">📷 景点</button>
+                <button type="button" data-val="爬山徒步">⛰ 徒步</button>
+                <button type="button" data-val="交通">🚗 交通</button>
+                <button type="button" data-val="娱乐">🎮 娱乐</button>
+                <button type="button" data-val="其他">📌 其他</button>
+              </div>
+            </div>
+            <div class="cd-field cd-row">
+              <label class="cd-label">消费</label>
+              <input id="cd-amount" type="number" inputmode="decimal"
+                     placeholder="0" step="0.01" min="0">
+              <select id="cd-currency">
+                <option value="">币种</option>
+                <option value="USD">USD $</option>
+                <option value="CNY">CNY ¥</option>
+                <option value="JPY">JPY ¥</option>
+                <option value="EUR">EUR €</option>
+                <option value="GBP">GBP £</option>
+                <option value="HKD">HKD</option>
+                <option value="TWD">TWD</option>
+              </select>
+            </div>
+            <div class="cd-field cd-row">
+              <label class="cd-label">评分</label>
+              <input id="cd-score" type="range" min="0" max="10" value="0" step="1">
+              <span id="cd-score-val" class="cd-score-val">—</span>
+            </div>
+            <div class="cd-field">
+              <label class="cd-label">短评</label>
+              <textarea id="cd-note" rows="2" maxlength="200"
+                        placeholder="可选 · 一句话感受"></textarea>
+            </div>
+            <label class="cd-field cd-toggle">
+              <input id="cd-build-loc" type="checkbox" checked>
+              <span>记入 Location 库 (下次还能搜到这个店)</span>
+            </label>
+          </div>
+          <div class="cd-submit-bar">
+            <button id="cd-submit" type="button" class="cd-go">完成打卡</button>
+          </div>
+        </section>
+
       </form>
     </dialog>
 
@@ -161,8 +227,8 @@
     </footer>
   </div>
 
-  <script src="/static/icons.js?v=21"></script>
+  <script src="/static/icons.js?v=24"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=21"></script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

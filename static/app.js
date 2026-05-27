@@ -339,14 +339,157 @@
       el.appendChild(fl);
     }
     if (text) {
-      const t = document.createElement('div');
-      t.className = 'msg-text';
-      t.textContent = text;
-      el.appendChild(t);
+      // Detect a ```checkin``` block and render as a compact card instead of
+      // dumping the raw YAML. Anything outside the fence renders as text.
+      const m = text.match(/^([\s\S]*?)```checkin\n([\s\S]*?)\n?```([\s\S]*)$/);
+      if (m) {
+        const before = m[1], yaml = m[2], after = m[3];
+        if (before.trim()) {
+          const t = document.createElement('div');
+          t.className = 'msg-text';
+          t.textContent = before.trimEnd();
+          el.appendChild(t);
+        }
+        el.appendChild(renderCheckinCard(parseCheckinYaml(yaml), yaml));
+        if (after.trim()) {
+          const t = document.createElement('div');
+          t.className = 'msg-text';
+          t.textContent = after.trimStart();
+          el.appendChild(t);
+        }
+      } else {
+        const t = document.createElement('div');
+        t.className = 'msg-text';
+        t.textContent = text;
+        el.appendChild(t);
+      }
     }
     messages.appendChild(el);
     bumpTyping();
     scrollToBottom(true);
+  }
+
+  // ---------- checkin block helpers ----------
+  // Minimal YAML parser for the CHECKIN.md schema: top-level scalar/list keys
+  // plus a single nested `selected_poi:` block. Anything more exotic is just
+  // ignored — the on-wire format is hand-built by buildCheckinBlock(), so we
+  // know exactly what shapes to expect.
+  function parseCheckinYaml(text) {
+    const out = { selected_poi: null };
+    let inPoi = false;
+    for (const rawLn of text.split('\n')) {
+      if (!rawLn.trim()) continue;
+      const indented = /^[ \t]{2,}/.test(rawLn);
+      const ln = rawLn.trim();
+      const kv = ln.match(/^([a-z_]+):\s*(.*)$/i);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      let val = kv[2];
+      if (indented) {
+        if (!inPoi) continue;
+        if (!out.selected_poi) out.selected_poi = {};
+        out.selected_poi[key] = val;
+        continue;
+      }
+      // Top-level
+      if (key === 'selected_poi') {
+        inPoi = true;
+        out.selected_poi = {};
+        continue;
+      }
+      inPoi = false;
+      // List literal [a, b, ...]
+      if (val.startsWith('[') && val.endsWith(']')) {
+        val = val.slice(1, -1).split(',').map((s) => s.trim());
+      }
+      out[key] = val;
+    }
+    return out;
+  }
+
+  function fmtCheckinTime(when) {
+    if (!when) return '';
+    const d = new Date(when);
+    if (isNaN(d.getTime())) return when;
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const pad = (n) => String(n).padStart(2, '0');
+    const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (sameDay) return `今天 ${hhmm}`;
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hhmm}`;
+  }
+
+  function currencySymbol(cur) {
+    const m = { USD: '$', CNY: '¥', JPY: '¥', EUR: '€', GBP: '£', HKD: 'HK$', TWD: 'NT$' };
+    return m[(cur || '').toUpperCase()] || (cur ? `${cur} ` : '');
+  }
+
+  function scoreStars(score) {
+    const n = parseInt(score, 10);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    const stars = Math.max(1, Math.min(5, Math.round(n / 2)));
+    return '⭐'.repeat(stars);
+  }
+
+  function renderCheckinCard(data, rawYaml) {
+    const card = document.createElement('div');
+    card.className = 'checkin-card';
+
+    const poi = data.selected_poi || {};
+    const name = poi.name || data.name || '(未命名)';
+    const when = fmtCheckinTime(data.when);
+    const accuracy = data.accuracy_m;
+    const type = poi.type;
+    const city = poi.city;
+    const address = poi.address;
+    const activity = data.activity_type;
+    const amount = data.amount;
+    const currency = data.currency;
+    const score = data.score;
+    const note = data.note;
+
+    const pinIcon = (window.icon && window.icon('pin', 18)) || '📍';
+
+    const subParts = [];
+    if (type) subParts.push(type);
+    if (city) subParts.push(city);
+    if (address) subParts.push(address);
+    const sub = subParts.join(' · ');
+
+    const detailParts = [];
+    if (activity) detailParts.push(activity);
+    if (amount) detailParts.push(`${currencySymbol(currency)}${amount}`);
+    if (score) {
+      const stars = scoreStars(score);
+      detailParts.push(stars ? `${stars} ${score}/10` : `${score}/10`);
+    }
+    const detail = detailParts.join(' · ');
+
+    card.innerHTML = `
+      <div class="cc-row cc-main">
+        <span class="cc-pin"></span>
+        <div class="cc-body">
+          <div class="cc-name"></div>
+          ${sub ? '<div class="cc-sub"></div>' : ''}
+        </div>
+        <span class="cc-time"></span>
+      </div>
+      ${detail ? '<div class="cc-detail"></div>' : ''}
+      ${note ? '<div class="cc-note"></div>' : ''}
+      <details class="cc-raw">
+        <summary>查看原始 YAML</summary>
+        <pre></pre>
+      </details>
+    `;
+    card.querySelector('.cc-pin').innerHTML = pinIcon;
+    card.querySelector('.cc-name').textContent = name;
+    if (sub) card.querySelector('.cc-sub').textContent = sub;
+    card.querySelector('.cc-time').textContent = when;
+    if (detail) card.querySelector('.cc-detail').textContent = detail;
+    if (note) card.querySelector('.cc-note').textContent = '"' + note + '"';
+    card.querySelector('.cc-raw pre').textContent = rawYaml;
+    if (accuracy) card.title = `定位精度 ±${accuracy}m`;
+    return card;
   }
 
   function appendAssistantText(text) {
@@ -930,15 +1073,70 @@
   const cdList = $('cd-list');
   const cdManualName = $('cd-manual-name');
   const cdManualGo = $('cd-manual-go');
+  // Stage 2 (form) elements
+  const cdStageList = $('cd-stage-list');
+  const cdStageForm = $('cd-stage-form');
+  const cdBack = $('cd-back');
+  const cdFormName = $('cd-form-name');
+  const cdFormMeta = $('cd-form-meta');
+  const cdActivity = $('cd-activity');
+  const cdAmount = $('cd-amount');
+  const cdCurrency = $('cd-currency');
+  const cdScore = $('cd-score');
+  const cdScoreVal = $('cd-score-val');
+  const cdNote = $('cd-note');
+  const cdBuildLoc = $('cd-build-loc');
+  const cdSubmit = $('cd-submit');
+
+  // Approximate FX rates → USD (rough Phase-2 defaults; user can edit later).
+  // Only used so the server-side hook can compute amount_usd. Field is omitted
+  // entirely if we can't guess.
+  const FX_TO_USD = {
+    USD: 1, CNY: 0.14, JPY: 0.0064, EUR: 1.08, GBP: 1.27, HKD: 0.13, TWD: 0.031,
+  };
+
+  // Currently-staged selection (carried between Stage 1 → Stage 2).
+  let pendingSelection = null;
 
   // Dialog-close listener: clear contents so next open starts fresh.
   if (checkinDialog) {
-    checkinDialog.addEventListener('close', () => {
-      cdList.innerHTML = '';
-      cdManualName.value = '';
-      cdStatus.textContent = '正在定位…';
-      cdStatus.className = 'cd-status';
-    });
+    checkinDialog.addEventListener('close', resetCheckinDialog);
+  }
+
+  function resetCheckinDialog() {
+    cdList.innerHTML = '';
+    cdManualName.value = '';
+    cdStatus.textContent = '正在定位…';
+    cdStatus.className = 'cd-status';
+    showStage('list');
+    // Form fields
+    cdActivity.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    cdAmount.value = '';
+    cdCurrency.value = '';
+    cdScore.value = '0';
+    cdScoreVal.textContent = '—';
+    cdNote.value = '';
+    cdBuildLoc.checked = true;
+    pendingSelection = null;
+  }
+
+  function showStage(name) {
+    cdStageList.classList.toggle('hidden', name !== 'list');
+    cdStageForm.classList.toggle('hidden', name !== 'form');
+  }
+
+  function enterFormStage(selection) {
+    pendingSelection = selection;
+    cdFormName.textContent = selection.name;
+    const metaParts = [];
+    if (selection.type) metaParts.push(selection.type);
+    if (selection.city) metaParts.push(selection.city);
+    if (selection.address) metaParts.push(selection.address);
+    if (selection.distance_m != null) metaParts.unshift(`${selection.distance_m}m`);
+    cdFormMeta.textContent = metaParts.join(' · ');
+    showStage('form');
+    // Focus the activity chips area on enter, but don't open mobile keyboard.
+    setTimeout(() => cdSubmit.focus(), 0);
   }
 
   function renderPoiList(pois, gps) {
@@ -964,40 +1162,97 @@
       row.querySelector('.cd-dist').textContent = `${p.distance_m}m`;
       row.querySelector('.cd-meta-info').textContent = meta || (p.source === 'osm' ? 'OSM' : '');
       row.addEventListener('click', () => {
-        const fields = {
+        const selection = {
           name: p.name,
-          build_location: true,
+          source: 'poi',
+          gps: gps ? { lat: gps.lat, lng: gps.lng, accuracy_m: gps.accuracy_m } : null,
+          osm_id: p.osm_id || '',
+          amap_poi_id: p.amap_poi_id || '',
+          fsq_id: p.fsq_id || '',
+          type: p.type || '',
+          city: p.city || '',
+          address: p.address || '',
+          distance_m: p.distance_m,
         };
-        if (gps) {
-          fields.gps = [gps.lat, gps.lng];
-          if (gps.accuracy_m != null) fields.accuracy_m = gps.accuracy_m;
-        }
-        if (p.osm_id) fields.osm_id = p.osm_id;
-        if (p.amap_poi_id) fields.amap_poi_id = p.amap_poi_id;
-        if (p.type) fields.type = p.type;
-        if (p.city) fields.city = p.city;
-        if (p.address) fields.address = p.address;
-        sendCheckin(fields);
-        checkinDialog.close();
+        enterFormStage(selection);
       });
       cdList.appendChild(row);
     }
   }
 
-  function sendManualCheckin(gps) {
+  function stageManualEntry(gps) {
     const raw = cdManualName.value.trim();
     if (!raw) {
       cdManualName.focus();
       return;
     }
-    const fields = { name: raw, build_location: true };
-    if (gps) {
-      fields.gps = [gps.lat, gps.lng];
-      if (gps.accuracy_m != null) fields.accuracy_m = gps.accuracy_m;
+    enterFormStage({
+      name: raw,
+      source: 'manual',
+      gps: gps ? { lat: gps.lat, lng: gps.lng, accuracy_m: gps.accuracy_m } : null,
+      osm_id: '', amap_poi_id: '', fsq_id: '',
+      type: '', city: '', address: '',
+      distance_m: null,
+    });
+  }
+
+  // Activity-chip single-select
+  cdActivity.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-val]');
+    if (!btn) return;
+    e.preventDefault();
+    const active = btn.classList.contains('active');
+    cdActivity.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    if (!active) btn.classList.add('active');
+  });
+
+  cdScore.addEventListener('input', () => {
+    const v = parseInt(cdScore.value, 10);
+    cdScoreVal.textContent = v > 0 ? `${v}/10` : '—';
+  });
+
+  cdBack.addEventListener('click', () => showStage('list'));
+
+  cdSubmit.addEventListener('click', () => {
+    if (!pendingSelection) return;
+    const fields = {
+      name: pendingSelection.name,
+      build_location: !!cdBuildLoc.checked,
+    };
+    if (pendingSelection.gps) {
+      fields.gps = [pendingSelection.gps.lat, pendingSelection.gps.lng];
+      if (pendingSelection.gps.accuracy_m != null) {
+        fields.accuracy_m = pendingSelection.gps.accuracy_m;
+      }
     }
+    if (pendingSelection.osm_id)      fields.osm_id = pendingSelection.osm_id;
+    if (pendingSelection.amap_poi_id) fields.amap_poi_id = pendingSelection.amap_poi_id;
+    if (pendingSelection.type)        fields.type = pendingSelection.type;
+    if (pendingSelection.city)        fields.city = pendingSelection.city;
+    if (pendingSelection.address)     fields.address = pendingSelection.address;
+
+    const activeChip = cdActivity.querySelector('button.active');
+    if (activeChip) fields.activity_type = activeChip.dataset.val;
+    const amountRaw = cdAmount.value.trim();
+    if (amountRaw) {
+      const amt = Number(amountRaw);
+      if (Number.isFinite(amt) && amt >= 0) {
+        fields.amount = amt;
+        if (cdCurrency.value) {
+          fields.currency = cdCurrency.value;
+          const rate = FX_TO_USD[cdCurrency.value];
+          if (rate != null) fields.rate = rate;
+        }
+      }
+    }
+    const scoreVal = parseInt(cdScore.value, 10);
+    if (scoreVal > 0) fields.score = scoreVal;
+    const noteRaw = cdNote.value.trim();
+    if (noteRaw) fields.note = noteRaw;
+
     sendCheckin(fields);
     checkinDialog.close();
-  }
+  });
 
   async function openCheckinDialog() {
     if (!checkinDialog || !checkinDialog.showModal) {
@@ -1019,25 +1274,34 @@
     cdManualName.value = '';
     checkinDialog.showModal();
 
-    // Wire manual-entry button to current GPS context.
+    // Wire manual-entry button to current GPS context (transitions to form stage).
     let currentGps = loadCachedGps();
-    const onManualGo = () => sendManualCheckin(currentGps);
+    const onManualGo = () => stageManualEntry(currentGps);
     cdManualGo.onclick = onManualGo;
     cdManualName.onkeydown = (e) => {
       if (e.key === 'Enter') { e.preventDefault(); onManualGo(); }
     };
 
+    // Tiny inline haversine — same formula as the server uses, in metres.
+    const _distM = (a, b) => {
+      const R = 6371000, toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+      const s = Math.sin(dLat / 2) ** 2
+              + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s));
+    };
+
     // If we have a fresh-enough cached fix, show POIs immediately.
     if (currentGps) {
-      cdStatus.textContent = `已有缓存定位 · 刷新中`;
+      cdStatus.textContent = `位置 (缓存) · acc ${currentGps.accuracy_m}m · 刷新中`;
       cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
       const pois = await searchNearby(currentGps.lat, currentGps.lng);
       if (checkinDialog.open) renderPoiList(pois, currentGps);
     }
 
-    // Get a fresh fix in the background; if it differs meaningfully, re-render.
+    // Get a fresh fix in the background.
     const fresh = await requestGps(10000);
-    if (!checkinDialog.open) return; // user closed before GPS came
+    if (!checkinDialog.open) return;
 
     if (!fresh) {
       if (!currentGps) {
@@ -1051,6 +1315,16 @@
       return;
     }
 
+    // If fresh is essentially the same spot, just update the status — keep
+    // the already-rendered POIs to avoid the "list flashes twice" effect.
+    if (currentGps && _distM(currentGps, fresh) < 30) {
+      currentGps = fresh;     // adopt newer accuracy / timestamp for manual entry
+      cdStatus.textContent = `位置 · acc ${fresh.accuracy_m}m`;
+      cdStatus.className = 'cd-status ready';
+      return;
+    }
+
+    // Moved meaningfully (or no cache to begin with) — re-query.
     currentGps = fresh;
     cdStatus.textContent = `位置 · acc ${fresh.accuracy_m}m`;
     cdStatus.className = 'cd-status ready';

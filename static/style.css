@@ -913,6 +913,236 @@ button { font-family: inherit; }
 .cd-go:hover { background: var(--accent-2); }
 .cd-go:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
+/* ---------- Check-in form (Stage 2) ---------- */
+.cd-stage { display: flex; flex-direction: column; min-height: 0; }
+.cd-stage.hidden { display: none; }
+.cd-title-stack {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 0;
+  overflow: hidden;
+}
+.cd-title-stack .cd-title {
+  font-weight: 600; font-size: 15px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-title-stack .cd-status {
+  font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-fields {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 14px;
+  max-height: 55vh;
+}
+.cd-field { display: flex; flex-direction: column; gap: 6px; }
+.cd-field.cd-row { flex-direction: row; align-items: center; gap: 8px; }
+.cd-field.cd-row .cd-label { flex-shrink: 0; width: 44px; }
+.cd-label {
+  font-size: 12px; font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: .02em;
+}
+.cd-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.cd-chips button {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+}
+.cd-chips button:hover {
+  background: var(--bg-4); color: var(--text);
+  border-color: var(--line-2);
+}
+.cd-chips button.active {
+  background: rgba(204,120,92,0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow-2);
+}
+.cd-field input[type="number"],
+.cd-field input[type="text"],
+.cd-field select,
+.cd-field textarea {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  box-shadow: var(--inset-recess);
+}
+.cd-field input[type="number"]:focus,
+.cd-field input[type="text"]:focus,
+.cd-field select:focus,
+.cd-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cd-field.cd-row input[type="number"] { flex: 1; min-width: 0; }
+.cd-field.cd-row select { width: 90px; }
+.cd-field textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.cd-field input[type="range"] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  outline: none;
+}
+.cd-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+}
+.cd-field input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+}
+.cd-score-val {
+  width: 32px;
+  text-align: right;
+  font-size: 14px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.cd-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+  padding: 4px 0;
+}
+.cd-toggle input[type="checkbox"] {
+  width: 18px; height: 18px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.cd-submit-bar {
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.cd-submit-bar .cd-go {
+  width: 100%;
+  padding: 12px;
+  font-size: 15px;
+}
+
+/* ---------- Check-in card (renders inside user bubble) ---------- */
+/* Replaces the raw ```checkin YAML``` so the chat history reads cleanly. */
+.checkin-card {
+  background: linear-gradient(135deg, rgba(204,120,92,0.10), rgba(204,120,92,0.04));
+  border: 1px solid rgba(204,120,92,0.35);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0;
+  min-width: 220px;
+  box-shadow: 0 0 14px var(--accent-glow-2);
+}
+.cc-row { display: flex; align-items: center; gap: 10px; }
+.cc-main { gap: 10px; }
+.cc-pin {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  background: rgba(204,120,92,0.18);
+  color: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.cc-body { flex: 1; min-width: 0; }
+.cc-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-time {
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cc-detail {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-left: 42px;   /* aligns under name */
+}
+.cc-note {
+  font-size: 12px;
+  color: var(--text-2);
+  font-style: italic;
+  padding-left: 42px;
+  opacity: 0.85;
+}
+.cc-raw {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.cc-raw summary {
+  cursor: pointer;
+  padding: 2px 0;
+  list-style: none;
+  user-select: none;
+  opacity: 0.55;
+}
+.cc-raw summary::-webkit-details-marker { display: none; }
+.cc-raw summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform .15s;
+}
+.cc-raw[open] summary::before { transform: rotate(90deg); }
+.cc-raw summary:hover { opacity: 0.9; }
+.cc-raw pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-3);
+}
+
 .attach-bar {
   display: flex;
   gap: 6px;
