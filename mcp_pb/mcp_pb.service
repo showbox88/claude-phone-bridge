@@ -1,0 +1,18 @@
+[Unit]
+Description=PocketBase MCP server (for claude.ai Custom Connectors)
+After=network.target pocketbase.service
+Wants=pocketbase.service
+
+[Service]
+Type=simple
+User=dev
+Group=dev
+WorkingDirectory=/home/dev/phone-bridge/mcp_pb
+EnvironmentFile=/home/dev/phone-bridge/.env
+ExecStart=/home/dev/phone-bridge/mcp_pb/.venv/bin/python3 server.py
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
