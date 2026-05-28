@@ -10,7 +10,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <link rel="stylesheet" href="/static/style.css?v=35">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -54,6 +54,13 @@
         <span class="seg-icon" data-icon="code" data-icon-size="16"></span><span>Code</span>
       </button>
     </div>
+    <div class="drawer-search">
+      <span class="ds-ic" data-icon="search" data-icon-size="14"></span>
+      <input id="session-search" type="search" placeholder="搜索标题或内容…"
+             autocomplete="off" spellcheck="false">
+      <button id="session-search-clear" class="ds-clear hidden" type="button"
+              aria-label="清空" data-icon="close" data-icon-size="14"></button>
+    </div>
     <button id="new-session-btn" class="new-session" type="button">
       <span class="plus" data-icon="plus" data-icon-size="16"></span><span>新建会话</span>
     </button>
@@ -61,38 +68,39 @@
   </aside>
   <div id="drawer-mask" class="drawer-mask hidden"></div>
 
-  <div class="main-pane">
-    <!-- top bar -->
-    <header class="app-bar">
-      <button id="drawer-btn" class="icon-btn" type="button" aria-label="会话" data-icon="menu"></button>
-      <div class="title">
-        <span class="dot" id="conn-dot" title="disconnected"></span>
-        <div class="title-stack">
-          <button id="source-btn" class="source-btn" type="button" title="切换电脑">
-            <span id="source-name">—</span>
-            <span class="caret" data-icon="caret" data-icon-size="12"></span>
-          </button>
-          <span id="session-title" class="session-title-sub">Claude</span>
-        </div>
-        <span class="cwd" id="cwd-label"></span>
+  <!-- top bar: full-width on desktop, sits above drawer + main-pane -->
+  <header class="app-bar">
+    <button id="drawer-btn" class="icon-btn" type="button" aria-label="会话" data-icon="menu"></button>
+    <div class="title">
+      <span class="dot" id="conn-dot" title="disconnected"></span>
+      <div class="title-stack">
+        <button id="source-btn" class="source-btn" type="button" title="切换电脑">
+          <span id="source-name">—</span>
+          <span class="caret" data-icon="caret" data-icon-size="12"></span>
+          <span id="app-version" class="app-version" title="资源缓存版本号"></span>
+        </button>
+        <span id="session-title" class="session-title-sub">Claude</span>
       </div>
-      <div class="actions">
-        <span id="workspace-indicator" class="workspace-indicator">Code</span>
-        <button id="model-btn" class="model-pill" type="button"><span id="model-label">默认</span><span class="caret" data-icon="caret" data-icon-size="12"></span></button>
-        <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知" data-icon="bell"></button>
-        <button id="menu-btn" class="icon-btn" type="button" title="菜单" data-icon="more"></button>
-      </div>
-    </header>
-
-    <div id="menu" class="menu hidden">
-      <button data-cmd="rename"><span class="ic" data-icon="edit" data-icon-size="16"></span>重命名当前</button>
-      <button data-cmd="cwd-prompt"><span class="ic" data-icon="folder" data-icon-size="16"></span>切换工作目录</button>
-      <button data-cmd="usage"><span class="ic" data-icon="chart" data-icon-size="16"></span>查看使用量</button>
+      <span class="cwd" id="cwd-label"></span>
     </div>
+    <div class="actions">
+      <span id="workspace-indicator" class="workspace-indicator">Code</span>
+      <button id="model-btn" class="model-pill" type="button"><span id="model-label">默认</span><span class="caret" data-icon="caret" data-icon-size="12"></span></button>
+      <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知" data-icon="bell"></button>
+      <button id="menu-btn" class="icon-btn" type="button" title="菜单" data-icon="more"></button>
+    </div>
+  </header>
 
-    <!-- model picker dropdown (positioned below the model button) -->
-    <div id="model-menu" class="menu hidden"></div>
+  <div id="menu" class="menu hidden">
+    <button data-cmd="rename"><span class="ic" data-icon="edit" data-icon-size="16"></span>重命名当前</button>
+    <button data-cmd="cwd-prompt"><span class="ic" data-icon="folder" data-icon-size="16"></span>切换工作目录</button>
+    <button data-cmd="usage"><span class="ic" data-icon="chart" data-icon-size="16"></span>查看使用量</button>
+  </div>
 
+  <!-- model picker dropdown (positioned below the model button) -->
+  <div id="model-menu" class="menu hidden"></div>
+
+  <div class="main-pane">
     <main id="messages" class="messages">
       <div class="messages-inner">
         <div id="empty-state" class="empty-state">
@@ -102,20 +110,105 @@
       </div>
     </main>
 
+    <!-- Check-in dialog: shown after picking "打卡" from the attach menu + GPS fix. -->
+    <dialog id="checkin-dialog" class="checkin-dialog">
+      <form method="dialog" class="cd-form">
+
+        <!-- Stage 1: pick a nearby POI or type a name -->
+        <section id="cd-stage-list" class="cd-stage">
+          <header class="cd-head">
+            <span class="cd-title">打卡</span>
+            <span id="cd-status" class="cd-status">正在定位…</span>
+            <button class="icon-btn" value="cancel" type="submit"
+                    aria-label="取消" data-icon="close"></button>
+          </header>
+          <div id="cd-list" class="cd-list" role="list"></div>
+          <div class="cd-manual">
+            <input id="cd-manual-name" type="text" placeholder="自己输入名字…"
+                   autocomplete="off" maxlength="60">
+            <button id="cd-manual-go" class="cd-go" type="button">下一步</button>
+          </div>
+        </section>
+
+        <!-- Stage 2: fill in optional fields (activity / amount / score / note) -->
+        <section id="cd-stage-form" class="cd-stage hidden">
+          <header class="cd-head">
+            <button id="cd-back" type="button" class="icon-btn"
+                    aria-label="返回" data-icon="back"></button>
+            <div class="cd-title-stack">
+              <span id="cd-form-name" class="cd-title">店名</span>
+              <span id="cd-form-meta" class="cd-status"></span>
+            </div>
+            <button class="icon-btn" value="cancel" type="submit"
+                    aria-label="取消" data-icon="close"></button>
+          </header>
+          <div class="cd-fields">
+            <div class="cd-field">
+              <label class="cd-label">类型</label>
+              <div class="cd-chips" id="cd-activity">
+                <button type="button" data-val="用餐">🍴 用餐</button>
+                <button type="button" data-val="休息">☕ 休息</button>
+                <button type="button" data-val="购物">🛍 购物</button>
+                <button type="button" data-val="景点观光">📷 景点</button>
+                <button type="button" data-val="爬山徒步">⛰ 徒步</button>
+                <button type="button" data-val="交通">🚗 交通</button>
+                <button type="button" data-val="娱乐">🎮 娱乐</button>
+                <button type="button" data-val="其他">📌 其他</button>
+              </div>
+            </div>
+            <div class="cd-field cd-row">
+              <label class="cd-label">消费</label>
+              <input id="cd-amount" type="number" inputmode="decimal"
+                     placeholder="0" step="0.01" min="0">
+              <select id="cd-currency">
+                <option value="">币种</option>
+                <option value="USD">USD $</option>
+                <option value="CNY">CNY ¥</option>
+                <option value="JPY">JPY ¥</option>
+                <option value="EUR">EUR €</option>
+                <option value="GBP">GBP £</option>
+                <option value="HKD">HKD</option>
+                <option value="TWD">TWD</option>
+              </select>
+            </div>
+            <div class="cd-field cd-row">
+              <label class="cd-label">评分</label>
+              <input id="cd-score" type="range" min="0" max="10" value="0" step="1">
+              <span id="cd-score-val" class="cd-score-val">—</span>
+            </div>
+            <div class="cd-field">
+              <label class="cd-label">短评</label>
+              <textarea id="cd-note" rows="2" maxlength="200"
+                        placeholder="可选 · 一句话感受"></textarea>
+            </div>
+            <label class="cd-field cd-toggle">
+              <input id="cd-build-loc" type="checkbox" checked>
+              <span>记入 Location 库 (下次还能搜到这个店)</span>
+            </label>
+          </div>
+          <div class="cd-submit-bar">
+            <button id="cd-submit" type="button" class="cd-go">完成打卡</button>
+          </div>
+        </section>
+
+      </form>
+    </dialog>
+
     <footer class="composer">
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
         <div class="composer-row">
           <div class="attach-wrap">
-            <button id="attach-btn" class="icon-btn pill" title="添加附件" type="button" data-icon="plus"></button>
+            <button id="attach-btn" class="icon-btn pill" title="更多" aria-label="更多" type="button" data-icon="chevron_up"></button>
             <div id="attach-menu" class="menu attach-menu hidden">
+              <button type="button" data-pick="checkin"><span class="ic" data-icon="pin" data-icon-size="16"></span>打卡</button>
               <button type="button" data-pick="camera"><span class="ic" data-icon="camera" data-icon-size="16"></span>拍照</button>
               <button type="button" data-pick="album"><span class="ic" data-icon="image" data-icon-size="16"></span>从相册选择</button>
               <button type="button" data-pick="clipboard"><span class="ic" data-icon="clipboard" data-icon-size="16"></span>粘贴截图</button>
               <button type="button" data-pick="file"><span class="ic" data-icon="file" data-icon-size="16"></span>选择文件</button>
+              <button type="button" data-pick="cwd-file" data-code-only><span class="ic" data-icon="paperclip" data-icon-size="16"></span>附加电脑文件路径</button>
             </div>
           </div>
-          <button id="file-pick-btn" class="icon-btn pill" title="附加电脑文件路径" type="button" data-icon="paperclip"></button>
           <input id="file-input" type="file"
                  accept="image/*,application/pdf,text/*,.md,.csv,.tsv,.json,.xml,.yaml,.yml,.toml,.ini,.log,.py,.js,.ts,.tsx,.jsx,.html,.css,.scss,.cpp,.cc,.c,.h,.hpp,.java,.kt,.go,.rs,.rb,.php,.sh,.sql,.xlsx,.xls"
                  multiple hidden>
@@ -137,8 +230,8 @@
     </footer>
   </div>
 
-  <script src="/static/icons.js?v=15"></script>
+  <script src="/static/icons.js?v=35"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=35"></script>
 </body>
 </html>

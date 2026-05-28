@@ -97,6 +97,63 @@ def list_sessions() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def search_sessions(query: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Return sessions where title OR any message content matches `query`.
+
+    Each result includes the standard list_sessions columns plus an optional
+    `match_snippet` (a short excerpt around the first matching text in a
+    message), so the UI can show *why* a session matched.
+    """
+    q = (query or "").strip()
+    if not q:
+        return list_sessions()
+    pat = f"%{q}%"
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT s.id, s.title, s.cwd, s.mode, s.model, s.created_at, s.updated_at,
+                   (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS msg_count,
+                   (SELECT m.content FROM messages m
+                    WHERE m.session_id = s.id AND m.content LIKE ?
+                    ORDER BY m.seq DESC LIMIT 1) AS _match_raw
+            FROM sessions s
+            WHERE s.title LIKE ?
+               OR EXISTS (SELECT 1 FROM messages m
+                          WHERE m.session_id = s.id AND m.content LIKE ?)
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+        """, (pat, pat, pat, limit)).fetchall()
+
+    q_low = q.lower()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        raw = d.pop("_match_raw", None)
+        if raw:
+            try:
+                payload = json.loads(raw)
+                text = ""
+                if isinstance(payload, dict):
+                    # user / assistant_text use "text"; tool_result uses "content"
+                    text = (payload.get("text") or payload.get("content")
+                            or json.dumps(payload, ensure_ascii=False))
+                else:
+                    text = str(payload)
+                idx = text.lower().find(q_low)
+                if idx >= 0:
+                    start = max(0, idx - 30)
+                    end = min(len(text), idx + len(q) + 60)
+                    snippet = text[start:end].replace("\n", " ")
+                    if start > 0:
+                        snippet = "…" + snippet
+                    if end < len(text):
+                        snippet = snippet + "…"
+                    d["match_snippet"] = snippet
+            except Exception:
+                pass
+        out.append(d)
+    return out
+
+
 def get_session(sid: str) -> dict[str, Any] | None:
     with _conn() as c:
         row = c.execute(

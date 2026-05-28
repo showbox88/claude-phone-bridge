@@ -52,17 +52,72 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("bridge")
 
+# ============================================================================
+# PocketBase (Smart Note 打卡子系统) — local-first canonical data store.
+# Claude SDK reaches it via Bash + curl using the auto-refreshed PB_TOKEN env.
+# Token is fetched at startup and refreshed every 30 min.
+# ============================================================================
+import urllib.request, urllib.error  # noqa: E401
+
+POCKETBASE_URL = os.environ.get("POCKETBASE_URL", "").rstrip("/")
+POCKETBASE_ADMIN_EMAIL = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
+POCKETBASE_ADMIN_PASSWORD = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
+
+
+def _pb_refresh_token() -> bool:
+    """Auth against PocketBase and set PB_TOKEN/PB_URL env vars for child Bash."""
+    if not (POCKETBASE_URL and POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD):
+        return False
+    try:
+        req = urllib.request.Request(
+            POCKETBASE_URL + "/api/collections/_superusers/auth-with-password",
+            data=json.dumps({
+                "identity": POCKETBASE_ADMIN_EMAIL,
+                "password": POCKETBASE_ADMIN_PASSWORD,
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+            os.environ["PB_TOKEN"] = data["token"]
+            os.environ["PB_URL"] = POCKETBASE_URL
+            log.info("PB token refreshed (len=%d)", len(data["token"]))
+            return True
+    except (urllib.error.URLError, KeyError, ValueError, OSError) as e:
+        log.error("PB token refresh failed: %s", e)
+        return False
+
+
+async def _pb_refresh_loop() -> None:
+    """Re-auth every 12 h so PB_TOKEN never expires under Claude's feet."""
+    while True:
+        try:
+            await asyncio.sleep(43200)
+            await asyncio.to_thread(_pb_refresh_token)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.exception("PB refresh loop error: %s", e)
+
+
 # Tools that auto-approve in CODE mode. Everything else hits the permission callback.
 AUTO_ALLOW = {
     "Read", "Glob", "Grep",
     "WebFetch", "WebSearch",
     "TodoWrite", "NotebookRead", "BashOutput",
 }
-# In CHAT mode we just allow web browsing; nothing touches the filesystem.
-CHAT_TOOLS = {"WebFetch", "WebSearch"}
+# In CHAT mode: web browsing + Read (for CHECKIN.md etc.) + Bash (gated by
+# can_use_tool fast-path to localhost PocketBase only — no destructive surface).
+CHAT_TOOLS = {"WebFetch", "WebSearch", "Bash", "Read"}
 CHAT_SYSTEM_PROMPT = (
     "You are Claude, a helpful AI assistant. The user is chatting casually. "
-    "Be concise, friendly, and direct. You can use WebFetch/WebSearch when needed."
+    "Be concise, friendly, and direct. You can use WebFetch/WebSearch when needed. "
+    "If the user message contains a ```checkin fenced code block, FIRST read "
+    "/home/dev/phone-bridge/CHECKIN.md and follow its rules exactly to write "
+    "the 打卡 data into the local PocketBase. Use curl with $PB_URL and "
+    "$PB_TOKEN env vars (already set by the server). After writing, reply with "
+    "a one-line confirmation."
 )
 
 # Models the UI exposes. Empty string = use whatever Claude Code's default is.
@@ -185,6 +240,13 @@ def _save_msg(role: str, content: dict) -> None:
 # ---------- permission callback ----------
 
 async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG001
+    # Fast-path: 打卡 Bash curl to local PocketBase — no phone confirmation needed.
+    # Match strictly on localhost:8090 / 127.0.0.1:8090 to keep blast radius tight.
+    if tool_name == "Bash" and POCKETBASE_URL:
+        cmd = str(tool_input.get("command", ""))
+        if ("127.0.0.1:8090" in cmd or "localhost:8090" in cmd) and \
+                ("curl " in cmd or "curl\n" in cmd):
+            return PermissionResultAllow(behavior="allow", updated_input=None)
     if tool_name in AUTO_ALLOW:
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
@@ -542,6 +604,11 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     push.init()
     db.init(state.cwd_root / ".bridge_data" / "bridge.db")
     uploads_dir()
+    # PocketBase: fetch initial token + spawn background refresh loop.
+    pb_ready = _pb_refresh_token()
+    pb_task = asyncio.create_task(_pb_refresh_loop()) if pb_ready else None
+    if not pb_ready and POCKETBASE_URL:
+        log.warning("PocketBase configured but initial auth failed — 打卡 will not work")
     try:
         latest = db.latest_session_id()
         if latest:
@@ -551,6 +618,10 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     except Exception as e:
         log.exception("initial Claude session failed: %s", e)
     yield
+    if pb_task is not None:
+        pb_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await pb_task
     if state.client is not None:
         with contextlib.suppress(Exception):
             await state.client.disconnect()
@@ -594,6 +665,14 @@ _PUBLIC_PREFIXES = ("/login", "/logout", "/setup", "/static/")
 _PUBLIC_EXACT = {
     "/sw.js", "/manifest.json", "/icon.svg",
     "/api/health", "/api/vapid-public-key",
+    # RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling service.
+    # Phone-bridge owns the root-path Tailscale Funnel mapping; mcp_pb's
+    # public URL is /mcp on the same hostname. claude.ai's connector probes
+    # this well-known URL during OAuth discovery before doing DCR.
+    "/.well-known/oauth-protected-resource/mcp",
+    # RFC 8414 path-suffixed authorization-server metadata. claude.ai's
+    # connector tries this URL (not /mcp/.well-known/...) to find OAuth endpoints.
+    "/.well-known/oauth-authorization-server/mcp",
 }
 
 
@@ -936,6 +1015,42 @@ async def api_health(request: Request):
     return base
 
 
+@app.get("/.well-known/oauth-protected-resource/mcp")
+async def mcp_oauth_resource_metadata():
+    """RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling
+    service. claude.ai's Custom Connector probes this during OAuth discovery
+    before DCR. Phone-bridge owns root-path Funnel; mcp_pb is at /mcp."""
+    return {
+        "resource": "https://dashboard-server.tail4cfa2.ts.net/mcp",
+        "authorization_servers": ["https://dashboard-server.tail4cfa2.ts.net/mcp"],
+        "scopes_supported": ["mcp"],
+        "bearer_methods_supported": ["header"],
+    }
+
+
+@app.get("/.well-known/oauth-authorization-server/mcp")
+async def mcp_oauth_authorization_server_metadata():
+    """RFC 8414 authorization-server metadata for issuer https://host/mcp.
+    Per RFC 8414, metadata for an issuer with path component lives at
+    /.well-known/oauth-authorization-server/<issuer-path>, which falls on the
+    root-path Funnel (phone-bridge), not on /mcp. Endpoints below are under
+    /mcp/* so they reach mcp_pb."""
+    base = "https://dashboard-server.tail4cfa2.ts.net/mcp"
+    return {
+        "issuer": base,
+        "authorization_endpoint": f"{base}/authorize",
+        "token_endpoint": f"{base}/token",
+        "registration_endpoint": f"{base}/register",
+        "revocation_endpoint": f"{base}/revoke",
+        "scopes_supported": ["mcp"],
+        "response_types_supported": ["code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
+        "revocation_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+        "code_challenge_methods_supported": ["S256"],
+    }
+
+
 # ---------- REST: VAPID/push ----------
 
 @app.get("/api/vapid-public-key")
@@ -1012,10 +1127,11 @@ async def mkdir(body: dict):
 # ---------- REST: sessions ----------
 
 @app.get("/api/sessions")
-async def api_sessions_list():
+async def api_sessions_list(q: str = ""):
     return {
         "current": state.session_id,
-        "sessions": db.list_sessions(),
+        "sessions": db.search_sessions(q) if q.strip() else db.list_sessions(),
+        "query": q,
     }
 
 
@@ -1059,6 +1175,270 @@ async def api_usage():
 async def api_meta():
     """Static metadata for the UI: available modes & models."""
     return {"modes": AVAILABLE_MODES, "models": AVAILABLE_MODELS}
+
+
+# ---------- REST: nearby POI (for check-in modal) ----------
+
+def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Approximate distance in metres between two lat/lng points."""
+    import math
+    R = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
+
+async def _overpass_query(lat: float, lng: float, radius_m: int) -> list[dict]:
+    """Query OpenStreetMap Overpass for nearby named POIs.
+
+    Uses `nwr` (nodes + ways + relations) since US/EU mapping often draws
+    stores as building polygons (ways) rather than single nodes. `out center`
+    gives us a centroid lat/lng for each way so we can compute distance.
+    """
+    import aiohttp
+    # Note: each `nwr[...]` is a separate filter; the (... ;) groups them.
+    q = (
+        f"[out:json][timeout:8];"
+        f"(nwr[\"amenity\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"shop\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"tourism\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"leisure\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"office\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"craft\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"healthcare\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"building\"=\"retail\"][\"name\"](around:{radius_m},{lat},{lng});"
+        f" nwr[\"building\"=\"commercial\"][\"name\"](around:{radius_m},{lat},{lng}););"
+        f"out center 40;"
+    )
+    out: list[dict] = []
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(
+                "https://overpass-api.de/api/interpreter",
+                data={"data": q},
+                headers={"User-Agent": "PhoneBridge/0.1 (checkin POI lookup)"},
+            ) as r:
+                if r.status != 200:
+                    log.warning("Overpass HTTP %d", r.status)
+                    return []
+                data = await r.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Overpass query failed: %s", e)
+        return []
+
+    for el in data.get("elements") or []:
+        tags = el.get("tags") or {}
+        name = tags.get("name") or tags.get("name:en") or tags.get("name:zh") or tags.get("brand")
+        if not name:
+            continue
+        # Nodes carry lat/lon directly; ways/relations expose `center` via
+        # `out center`. Fall back gracefully if shape is unexpected.
+        p_lat = el.get("lat")
+        p_lng = el.get("lon")
+        if p_lat is None or p_lng is None:
+            c = el.get("center") or {}
+            p_lat = c.get("lat")
+            p_lng = c.get("lon")
+        if p_lat is None or p_lng is None:
+            continue
+        # Pick the most-specific category tag for display.
+        kind = (tags.get("amenity") or tags.get("shop")
+                or tags.get("tourism") or tags.get("leisure")
+                or tags.get("office") or tags.get("craft")
+                or tags.get("healthcare") or tags.get("building") or "")
+        el_type = el.get("type", "node")
+        out.append({
+            "name": str(name)[:80],
+            "lat": float(p_lat),
+            "lng": float(p_lng),
+            "distance_m": int(round(_haversine_m(lat, lng, float(p_lat), float(p_lng)))),
+            "type": kind,
+            "address": tags.get("addr:street", "") or tags.get("addr:full", ""),
+            "city": tags.get("addr:city", ""),
+            "osm_id": f"{el_type}/{el.get('id')}" if el.get("id") else "",
+            "amap_poi_id": "",
+            "fsq_id": "",
+            "source": "osm",
+        })
+    return out
+
+
+async def _foursquare_query(lat: float, lng: float, radius_m: int) -> list[dict]:
+    """Query Foursquare Places API for nearby POIs. Requires FOURSQUARE_KEY env.
+
+    Foursquare has good US/global commercial coverage where OSM is sparse.
+    Endpoint: https://places-api.foursquare.com/places/search
+    """
+    key = os.environ.get("FOURSQUARE_KEY", "").strip()
+    if not key:
+        return []
+    import aiohttp
+    out: list[dict] = []
+    try:
+        timeout = aiohttp.ClientTimeout(total=6)
+        params = {
+            "ll": f"{lat},{lng}",
+            "radius": str(radius_m),
+            "limit": "25",
+        }
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "X-Places-Api-Version": "2025-06-17",
+            "Accept": "application/json",
+        }
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(
+                "https://places-api.foursquare.com/places/search",
+                params=params, headers=headers,
+            ) as r:
+                if r.status != 200:
+                    body = await r.text()
+                    log.warning("Foursquare HTTP %d: %s", r.status, body[:200])
+                    return []
+                data = await r.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Foursquare query failed: %s: %s", type(e).__name__, e)
+        return []
+
+    for p in data.get("results") or []:
+        name = p.get("name")
+        if not name:
+            continue
+        # Newer places-api.foursquare.com returns latitude/longitude at the
+        # top level of each place; the legacy v3 schema nested them under
+        # `geocodes.main.{latitude,longitude}`. Support both for safety.
+        p_lat = p.get("latitude")
+        p_lng = p.get("longitude")
+        if p_lat is None or p_lng is None:
+            geo = (p.get("geocodes") or {}).get("main") or {}
+            p_lat = geo.get("latitude"); p_lng = geo.get("longitude")
+        if p_lat is None or p_lng is None:
+            continue
+        cats = p.get("categories") or []
+        kind = cats[0]["name"] if cats and cats[0].get("name") else ""
+        loc = p.get("location") or {}
+        out.append({
+            "name": str(name)[:80],
+            "lat": float(p_lat),
+            "lng": float(p_lng),
+            "distance_m": int(p.get("distance") or
+                              round(_haversine_m(lat, lng, float(p_lat), float(p_lng)))),
+            "type": kind,
+            "address": loc.get("address", "") or loc.get("formatted_address", ""),
+            "city": loc.get("locality", "") or loc.get("region", ""),
+            "osm_id": "",
+            "amap_poi_id": "",
+            # Newer API: fsq_place_id; legacy: fsq_id.
+            "fsq_id": p.get("fsq_place_id") or p.get("fsq_id") or "",
+            "source": "fsq",
+        })
+    return out
+
+
+async def _amap_query(lat: float, lng: float, radius_m: int) -> list[dict]:
+    """Query 高德 Web API /place/around. Requires AMAP_KEY env."""
+    key = os.environ.get("AMAP_KEY", "").strip()
+    if not key:
+        return []
+    import aiohttp
+    out: list[dict] = []
+    try:
+        timeout = aiohttp.ClientTimeout(total=5)
+        params = {
+            "location": f"{lng},{lat}",  # NB: 高德 uses lng,lat order
+            "radius": str(radius_m),
+            "extensions": "base",
+            "offset": "25",
+            "page": "1",
+            "key": key,
+        }
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(
+                "https://restapi.amap.com/v3/place/around",
+                params=params,
+            ) as r:
+                if r.status != 200:
+                    log.warning("Amap HTTP %d", r.status)
+                    return []
+                data = await r.json()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Amap query failed: %s", e)
+        return []
+
+    if str(data.get("status")) != "1":
+        log.warning("Amap error: %s", data.get("info"))
+        return []
+    for p in data.get("pois") or []:
+        loc = (p.get("location") or "").split(",")
+        if len(loc) != 2:
+            continue
+        try:
+            p_lng = float(loc[0]); p_lat = float(loc[1])
+        except ValueError:
+            continue
+        out.append({
+            "name": str(p.get("name") or "")[:80],
+            "lat": p_lat,
+            "lng": p_lng,
+            "distance_m": int(p.get("distance") or
+                              round(_haversine_m(lat, lng, p_lat, p_lng))),
+            "type": p.get("type", "").split(";")[0] if p.get("type") else "",
+            "address": p.get("address") or "",
+            "city": p.get("cityname") or "",
+            "osm_id": "",
+            "amap_poi_id": p.get("id") or "",
+            "fsq_id": "",
+            "source": "amap",
+        })
+    return out
+
+
+def _merge_pois(lists: list[list[dict]]) -> list[dict]:
+    """Combine multiple POI lists, dedup by (lowercased name, ~30m radius).
+    When two sources describe the same place, fold their IDs together."""
+    merged: list[dict] = []
+    for src in lists:
+        for p in src:
+            collapsed = False
+            for m in merged:
+                if (m["name"].lower() == p["name"].lower()
+                        and _haversine_m(m["lat"], m["lng"], p["lat"], p["lng"]) < 30):
+                    for k in ("osm_id", "amap_poi_id", "fsq_id"):
+                        if not m.get(k) and p.get(k):
+                            m[k] = p[k]
+                    if not m.get("address") and p.get("address"):
+                        m["address"] = p["address"]
+                    if not m.get("city") and p.get("city"):
+                        m["city"] = p["city"]
+                    if p["distance_m"] < m["distance_m"]:
+                        m["distance_m"] = p["distance_m"]
+                    collapsed = True
+                    break
+            if not collapsed:
+                merged.append(dict(p))
+    merged.sort(key=lambda x: x["distance_m"])
+    return merged
+
+
+@app.get("/api/poi/around")
+async def api_poi_around(lat: float, lng: float, radius: int = 200):
+    """Return nearby POIs from Foursquare (US/global commercial), 高德 (CN),
+    and OSM Overpass (global fallback). Empty list on total failure — UI
+    should let the user type a name manually in that case."""
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        raise HTTPException(400, "invalid lat/lng")
+    radius = max(50, min(int(radius), 1000))
+    fsq_task  = asyncio.create_task(_foursquare_query(lat, lng, radius))
+    amap_task = asyncio.create_task(_amap_query(lat, lng, radius))
+    osm_task  = asyncio.create_task(_overpass_query(lat, lng, radius))
+    fsq_pois, amap_pois, osm_pois = await asyncio.gather(fsq_task, amap_task, osm_task)
+    # Order matters: a source listed earlier "wins" naming/typing on tie.
+    # Foursquare first → richest commercial names; 高德 catches Chinese POIs.
+    merged = _merge_pois([fsq_pois, amap_pois, osm_pois])
+    return {"pois": merged[:15], "lat": lat, "lng": lng, "radius_m": radius}
 
 
 @app.delete("/api/sessions/{sid}")

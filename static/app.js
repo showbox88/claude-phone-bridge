@@ -3,6 +3,17 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+
+  // Asset cache version — parsed from this script's own `?v=N` query so it
+  // updates automatically when index.html bumps the version. Rendered in the
+  // app-bar so refresh state is visible at a glance.
+  (() => {
+    const m = (document.currentScript && document.currentScript.src ||
+               document.querySelector('script[src*="app.js?v="]')?.src || '')
+              .match(/[?&]v=(\d+)/);
+    const el = $('app-version');
+    if (el) el.textContent = m ? 'v' + m[1] : '';
+  })();
   const messagesScroll = $('messages');
   const messages = messagesScroll.querySelector('.messages-inner') || messagesScroll;
   const emptyState = $('empty-state');
@@ -20,7 +31,7 @@
   const attachMenu = $('attach-menu');
   const albumInput = $('album-input');
   const galleryInput = $('gallery-input');
-  const filePickBtn = $('file-pick-btn');
+  const filePickBtn = $('file-pick-btn'); // legacy; may be null after menu consolidation
   const fileInput = $('file-input');
   const cameraInput = $('camera-input');
   const attachBar = $('attach-bar');
@@ -30,6 +41,8 @@
   const drawerClose = $('drawer-close');
   const newSessionBtn = $('new-session-btn');
   const sessionListEl = $('session-list');
+  const sessionSearch = $('session-search');
+  const sessionSearchClear = $('session-search-clear');
 
   let currentSessionId = null;
   let currentSessionTitle = '';
@@ -339,14 +352,157 @@
       el.appendChild(fl);
     }
     if (text) {
-      const t = document.createElement('div');
-      t.className = 'msg-text';
-      t.textContent = text;
-      el.appendChild(t);
+      // Detect a ```checkin``` block and render as a compact card instead of
+      // dumping the raw YAML. Anything outside the fence renders as text.
+      const m = text.match(/^([\s\S]*?)```checkin\n([\s\S]*?)\n?```([\s\S]*)$/);
+      if (m) {
+        const before = m[1], yaml = m[2], after = m[3];
+        if (before.trim()) {
+          const t = document.createElement('div');
+          t.className = 'msg-text';
+          t.textContent = before.trimEnd();
+          el.appendChild(t);
+        }
+        el.appendChild(renderCheckinCard(parseCheckinYaml(yaml), yaml));
+        if (after.trim()) {
+          const t = document.createElement('div');
+          t.className = 'msg-text';
+          t.textContent = after.trimStart();
+          el.appendChild(t);
+        }
+      } else {
+        const t = document.createElement('div');
+        t.className = 'msg-text';
+        t.textContent = text;
+        el.appendChild(t);
+      }
     }
     messages.appendChild(el);
     bumpTyping();
     scrollToBottom(true);
+  }
+
+  // ---------- checkin block helpers ----------
+  // Minimal YAML parser for the CHECKIN.md schema: top-level scalar/list keys
+  // plus a single nested `selected_poi:` block. Anything more exotic is just
+  // ignored — the on-wire format is hand-built by buildCheckinBlock(), so we
+  // know exactly what shapes to expect.
+  function parseCheckinYaml(text) {
+    const out = { selected_poi: null };
+    let inPoi = false;
+    for (const rawLn of text.split('\n')) {
+      if (!rawLn.trim()) continue;
+      const indented = /^[ \t]{2,}/.test(rawLn);
+      const ln = rawLn.trim();
+      const kv = ln.match(/^([a-z_]+):\s*(.*)$/i);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      let val = kv[2];
+      if (indented) {
+        if (!inPoi) continue;
+        if (!out.selected_poi) out.selected_poi = {};
+        out.selected_poi[key] = val;
+        continue;
+      }
+      // Top-level
+      if (key === 'selected_poi') {
+        inPoi = true;
+        out.selected_poi = {};
+        continue;
+      }
+      inPoi = false;
+      // List literal [a, b, ...]
+      if (val.startsWith('[') && val.endsWith(']')) {
+        val = val.slice(1, -1).split(',').map((s) => s.trim());
+      }
+      out[key] = val;
+    }
+    return out;
+  }
+
+  function fmtCheckinTime(when) {
+    if (!when) return '';
+    const d = new Date(when);
+    if (isNaN(d.getTime())) return when;
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    const pad = (n) => String(n).padStart(2, '0');
+    const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (sameDay) return `今天 ${hhmm}`;
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${hhmm}`;
+  }
+
+  function currencySymbol(cur) {
+    const m = { USD: '$', CNY: '¥', JPY: '¥', EUR: '€', GBP: '£', HKD: 'HK$', TWD: 'NT$' };
+    return m[(cur || '').toUpperCase()] || (cur ? `${cur} ` : '');
+  }
+
+  function scoreStars(score) {
+    const n = parseInt(score, 10);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    const stars = Math.max(1, Math.min(5, Math.round(n / 2)));
+    return '⭐'.repeat(stars);
+  }
+
+  function renderCheckinCard(data, rawYaml) {
+    const card = document.createElement('div');
+    card.className = 'checkin-card';
+
+    const poi = data.selected_poi || {};
+    const name = poi.name || data.name || '(未命名)';
+    const when = fmtCheckinTime(data.when);
+    const accuracy = data.accuracy_m;
+    const type = poi.type;
+    const city = poi.city;
+    const address = poi.address;
+    const activity = data.activity_type;
+    const amount = data.amount;
+    const currency = data.currency;
+    const score = data.score;
+    const note = data.note;
+
+    const pinIcon = (window.icon && window.icon('pin', 18)) || '📍';
+
+    const subParts = [];
+    if (type) subParts.push(type);
+    if (city) subParts.push(city);
+    if (address) subParts.push(address);
+    const sub = subParts.join(' · ');
+
+    const detailParts = [];
+    if (activity) detailParts.push(activity);
+    if (amount) detailParts.push(`${currencySymbol(currency)}${amount}`);
+    if (score) {
+      const stars = scoreStars(score);
+      detailParts.push(stars ? `${stars} ${score}/10` : `${score}/10`);
+    }
+    const detail = detailParts.join(' · ');
+
+    card.innerHTML = `
+      <div class="cc-row cc-main">
+        <span class="cc-pin"></span>
+        <div class="cc-body">
+          <div class="cc-name"></div>
+          ${sub ? '<div class="cc-sub"></div>' : ''}
+        </div>
+        <span class="cc-time"></span>
+      </div>
+      ${detail ? '<div class="cc-detail"></div>' : ''}
+      ${note ? '<div class="cc-note"></div>' : ''}
+      <details class="cc-raw">
+        <summary>查看原始 YAML</summary>
+        <pre></pre>
+      </details>
+    `;
+    card.querySelector('.cc-pin').innerHTML = pinIcon;
+    card.querySelector('.cc-name').textContent = name;
+    if (sub) card.querySelector('.cc-sub').textContent = sub;
+    card.querySelector('.cc-time').textContent = when;
+    if (detail) card.querySelector('.cc-detail').textContent = detail;
+    if (note) card.querySelector('.cc-note').textContent = '"' + note + '"';
+    card.querySelector('.cc-raw pre').textContent = rawYaml;
+    if (accuracy) card.title = `定位精度 ±${accuracy}m`;
+    return card;
   }
 
   function appendAssistantText(text) {
@@ -583,10 +739,32 @@
   }
 
   // ---------- session list ----------
-  async function loadSessionList() {
+  // HTML-escape + highlight occurrences of `q` (case-insensitive) using <mark>.
+  function highlightMatch(text, q) {
+    const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (!q) return escape(text);
+    const lower = text.toLowerCase();
+    const qLow = q.toLowerCase();
+    let out = '', i = 0;
+    while (i < text.length) {
+      const idx = lower.indexOf(qLow, i);
+      if (idx < 0) { out += escape(text.slice(i)); break; }
+      out += escape(text.slice(i, idx));
+      out += '<mark>' + escape(text.slice(idx, idx + q.length)) + '</mark>';
+      i = idx + q.length;
+    }
+    return out;
+  }
+
+  async function loadSessionList(query) {
+    // No arg → reuse the current search box value so refreshes preserve filter.
+    if (query === undefined) query = sessionSearch ? sessionSearch.value : '';
+    const q = (query || '').trim();
     let data;
     try {
-      const r = await fetch(apiUrl('/api/sessions'));
+      const url = q ? `/api/sessions?q=${encodeURIComponent(q)}` : '/api/sessions';
+      const r = await fetch(apiUrl(url));
       if (!r.ok) return;
       data = await r.json();
     } catch (_) { return; }
@@ -595,9 +773,11 @@
     if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding: 20px 12px; text-align: center; color: var(--text-3); font-size: 13px;';
-      empty.textContent = currentMode === 'chat'
-        ? '没有 Chat 会话，点 ＋ 新建一个'
-        : '没有 Code 会话，点 ＋ 新建一个';
+      empty.textContent = q
+        ? `没有匹配「${q}」的会话`
+        : (currentMode === 'chat'
+            ? '没有 Chat 会话，点 ＋ 新建一个'
+            : '没有 Code 会话，点 ＋ 新建一个');
       sessionListEl.appendChild(empty);
       return;
     }
@@ -610,24 +790,42 @@
       const date = new Date((s.updated_at || s.created_at) * 1000);
       const meta = `${date.toLocaleString('zh-CN', { hour12: false })} · ${s.msg_count}条`;
       const badgeIcon = (window.icon && window.icon(mode === 'chat' ? 'chat' : 'code', 13)) || '';
+      const editIcon = (window.icon && window.icon('edit', 14)) || '✎';
       const trashIcon = (window.icon && window.icon('trash', 16)) || '×';
       item.innerHTML = `
         <span class="si-badge"></span>
         <div class="si-main">
           <div class="si-title"></div>
           <div class="si-meta"></div>
+          <div class="si-snippet hidden"></div>
         </div>
+        <button class="si-edit" type="button" title="编辑标题"></button>
         <button class="si-del" type="button" title="删除"></button>
       `;
       item.querySelector('.si-badge').innerHTML = badgeIcon;
+      item.querySelector('.si-edit').innerHTML = editIcon;
       item.querySelector('.si-del').innerHTML = trashIcon;
-      item.querySelector('.si-title').textContent = t;
+      // Highlight matches in title when searching; snippet shows matched body text
+      item.querySelector('.si-title').innerHTML = highlightMatch(t, q);
       item.querySelector('.si-meta').textContent = meta;
+      const snipEl = item.querySelector('.si-snippet');
+      if (q && s.match_snippet) {
+        snipEl.innerHTML = highlightMatch(s.match_snippet, q);
+        snipEl.classList.remove('hidden');
+      }
       item.addEventListener('click', () => {
         if (s.id !== currentSessionId) {
           send({ type: 'cmd', name: 'load_session', id: s.id });
         }
-        closeDrawer();
+        if (!isDesktopDrawer()) closeDrawer();
+      });
+      item.querySelector('.si-edit').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = prompt('会话标题:', s.title || '');
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (trimmed === (s.title || '').trim()) return;
+        send({ type: 'cmd', name: 'rename_session', id: s.id, title: trimmed });
       });
       item.querySelector('.si-del').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -638,25 +836,87 @@
     }
   }
 
+  // Search box → debounced reload of session list with `q`.
+  let searchDebounce = null;
+  let lastSearchQuery = '';
+  function applySearch(immediate = false) {
+    const q = sessionSearch ? sessionSearch.value : '';
+    if (sessionSearchClear) sessionSearchClear.classList.toggle('hidden', !q);
+    const run = () => {
+      if (q === lastSearchQuery) return;
+      lastSearchQuery = q;
+      loadSessionList(q);
+    };
+    if (immediate) { clearTimeout(searchDebounce); run(); return; }
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(run, 180);
+  }
+  if (sessionSearch) {
+    sessionSearch.addEventListener('input', () => applySearch(false));
+    sessionSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && sessionSearch.value) {
+        sessionSearch.value = '';
+        applySearch(true);
+      }
+    });
+  }
+  if (sessionSearchClear) {
+    sessionSearchClear.addEventListener('click', () => {
+      sessionSearch.value = '';
+      sessionSearch.focus();
+      applySearch(true);
+    });
+  }
+
+  // Desktop drawer uses `body.drawer-expanded` (grid column toggle).
+  // Mobile drawer uses the existing `.drawer.hidden` overlay.
+  const desktopDrawerMql = window.matchMedia('(min-width: 768px)');
+  const DRAWER_KEY = 'bridge.drawer_expanded';
+
+  function isDesktopDrawer() { return desktopDrawerMql.matches; }
+
   function openDrawer() {
-    drawer.classList.remove('hidden');
-    drawerMask.classList.remove('hidden');
+    if (isDesktopDrawer()) {
+      document.body.classList.add('drawer-expanded');
+      localStorage.setItem(DRAWER_KEY, '1');
+    } else {
+      drawer.classList.remove('hidden');
+      drawerMask.classList.remove('hidden');
+    }
     drawer.setAttribute('aria-hidden', 'false');
     loadSessionList();
   }
   function closeDrawer() {
-    drawer.classList.add('hidden');
-    drawerMask.classList.add('hidden');
+    if (isDesktopDrawer()) {
+      document.body.classList.remove('drawer-expanded');
+      localStorage.setItem(DRAWER_KEY, '0');
+    } else {
+      drawer.classList.add('hidden');
+      drawerMask.classList.add('hidden');
+    }
     drawer.setAttribute('aria-hidden', 'true');
   }
+  function toggleDrawer() {
+    if (isDesktopDrawer()) {
+      if (document.body.classList.contains('drawer-expanded')) closeDrawer();
+      else openDrawer();
+    } else {
+      openDrawer();
+    }
+  }
 
-  drawerBtn.addEventListener('click', openDrawer);
+  // Default: collapsed. Restore expanded state from localStorage on desktop only.
+  if (isDesktopDrawer() && localStorage.getItem(DRAWER_KEY) === '1') {
+    document.body.classList.add('drawer-expanded');
+    loadSessionList();
+  }
+
+  drawerBtn.addEventListener('click', toggleDrawer);
   drawerClose.addEventListener('click', closeDrawer);
   drawerMask.addEventListener('click', closeDrawer);
   newSessionBtn.addEventListener('click', () => {
-    // create a new session in the current workspace mode
     send({ type: 'cmd', name: 'new_session', mode: currentMode });
-    closeDrawer();
+    if (!isDesktopDrawer()) closeDrawer();
   });
 
   // ---------- event router ----------
@@ -812,6 +1072,383 @@
     }
   });
   sendBtn.addEventListener('click', sendCurrent);
+
+  // ---------- check-in FAB (Phase 2 Step 1: prompt-only minimum) ----------
+  // Composes a minimal ```checkin``` fenced block and sends it as a normal
+  // user_message. Server-side CHECKIN.md instructs Claude to parse + write
+  // PocketBase. Later steps swap the prompt for a real geo/POI modal.
+  function isoNowWithOffset() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const tz = -d.getTimezoneOffset();
+    const sign = tz >= 0 ? '+' : '-';
+    const tzh = pad(Math.floor(Math.abs(tz) / 60));
+    const tzm = pad(Math.abs(tz) % 60);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T`
+         + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+         + `${sign}${tzh}:${tzm}`;
+  }
+
+  function buildCheckinBlock(fields) {
+    // fields: {name, build_location?, activity_type?, amount?, currency?, rate?,
+    //         score?, note?, gps?: [lat,lng], accuracy_m?, osm_id?, amap_poi_id?,
+    //         type?, city?, address?}
+    const lines = ['```checkin'];
+    lines.push(`when: ${isoNowWithOffset()}`);
+    if (fields.gps) {
+      lines.push(`gps: [${fields.gps[0]}, ${fields.gps[1]}]`);
+      if (fields.accuracy_m != null) lines.push(`accuracy_m: ${fields.accuracy_m}`);
+    }
+    if (fields.name) {
+      lines.push('selected_poi:');
+      lines.push(`  name: ${fields.name}`);
+      if (fields.osm_id)      lines.push(`  osm_id: ${fields.osm_id}`);
+      if (fields.amap_poi_id) lines.push(`  amap_poi_id: ${fields.amap_poi_id}`);
+      if (fields.type)        lines.push(`  type: ${fields.type}`);
+      if (fields.city)        lines.push(`  city: ${fields.city}`);
+      if (fields.address)     lines.push(`  address: ${fields.address}`);
+    }
+    lines.push(`build_location: ${fields.build_location === false ? 'false' : 'true'}`);
+    if (fields.activity_type) lines.push(`activity_type: ${fields.activity_type}`);
+    if (fields.amount != null) lines.push(`amount: ${fields.amount}`);
+    if (fields.currency) lines.push(`currency: ${fields.currency}`);
+    if (fields.rate != null) lines.push(`rate: ${fields.rate}`);
+    if (fields.score != null) lines.push(`score: ${fields.score}`);
+    if (fields.note) lines.push(`note: ${fields.note}`);
+    lines.push('```');
+    return lines.join('\n');
+  }
+
+  function sendCheckin(fields) {
+    const block = buildCheckinBlock(fields);
+    const ok = send({ type: 'user_message', text: block, images: [], files: [] });
+    if (!ok) return false;
+    setResponding(true);
+    return true;
+  }
+
+  // Step 2: geolocation cache + async fetch.
+  // Per CHECKIN.md the server uses `gps` to dedupe Locations within 100m.
+  // We cache the last fix in localStorage so a second click within 30 min is
+  // instant; in parallel we kick off a fresh high-accuracy request whose
+  // result lands in cache for next time.
+  const GPS_CACHE_KEY = 'bridge.lastGps';
+  const GPS_CACHE_TTL_MS = 30 * 60 * 1000;
+
+  function loadCachedGps() {
+    try {
+      const raw = localStorage.getItem(GPS_CACHE_KEY);
+      if (!raw) return null;
+      const o = JSON.parse(raw);
+      if (!o || typeof o.lat !== 'number' || typeof o.lng !== 'number') return null;
+      if (Date.now() - (o.t || 0) > GPS_CACHE_TTL_MS) return null;
+      return o;
+    } catch (_) { return null; }
+  }
+
+  function saveCachedGps(lat, lng, accuracy_m) {
+    try {
+      localStorage.setItem(GPS_CACHE_KEY, JSON.stringify({
+        lat, lng, accuracy_m, t: Date.now(),
+      }));
+    } catch (_) { /* quota or disabled — silent */ }
+  }
+
+  function requestGps(timeoutMs = 8000) {
+    return new Promise((resolve) => {
+      if (!('geolocation' in navigator)) return resolve(null);
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const acc = Math.round(pos.coords.accuracy || 0);
+          saveCachedGps(lat, lng, acc);
+          finish({ lat, lng, accuracy_m: acc });
+        },
+        () => finish(null),
+        { enableHighAccuracy: true, timeout: timeoutMs, maximumAge: 60000 },
+      );
+    });
+  }
+
+  // Step 3: POI picker dialog backed by /api/poi/around.
+  async function searchNearby(lat, lng, radius = 300) {
+    try {
+      const r = await fetch(apiUrl(`/api/poi/around?lat=${lat}&lng=${lng}&radius=${radius}`));
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data.pois) ? data.pois : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  const checkinDialog = $('checkin-dialog');
+  const cdStatus = $('cd-status');
+  const cdList = $('cd-list');
+  const cdManualName = $('cd-manual-name');
+  const cdManualGo = $('cd-manual-go');
+  // Stage 2 (form) elements
+  const cdStageList = $('cd-stage-list');
+  const cdStageForm = $('cd-stage-form');
+  const cdBack = $('cd-back');
+  const cdFormName = $('cd-form-name');
+  const cdFormMeta = $('cd-form-meta');
+  const cdActivity = $('cd-activity');
+  const cdAmount = $('cd-amount');
+  const cdCurrency = $('cd-currency');
+  const cdScore = $('cd-score');
+  const cdScoreVal = $('cd-score-val');
+  const cdNote = $('cd-note');
+  const cdBuildLoc = $('cd-build-loc');
+  const cdSubmit = $('cd-submit');
+
+  // Approximate FX rates → USD (rough Phase-2 defaults; user can edit later).
+  // Only used so the server-side hook can compute amount_usd. Field is omitted
+  // entirely if we can't guess.
+  const FX_TO_USD = {
+    USD: 1, CNY: 0.14, JPY: 0.0064, EUR: 1.08, GBP: 1.27, HKD: 0.13, TWD: 0.031,
+  };
+
+  // Currently-staged selection (carried between Stage 1 → Stage 2).
+  let pendingSelection = null;
+
+  // Dialog-close listener: clear contents so next open starts fresh.
+  if (checkinDialog) {
+    checkinDialog.addEventListener('close', resetCheckinDialog);
+  }
+
+  function resetCheckinDialog() {
+    cdList.innerHTML = '';
+    cdManualName.value = '';
+    cdStatus.textContent = '正在定位…';
+    cdStatus.className = 'cd-status';
+    showStage('list');
+    // Form fields
+    cdActivity.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    cdAmount.value = '';
+    cdCurrency.value = '';
+    cdScore.value = '0';
+    cdScoreVal.textContent = '—';
+    cdNote.value = '';
+    cdBuildLoc.checked = true;
+    pendingSelection = null;
+  }
+
+  function showStage(name) {
+    cdStageList.classList.toggle('hidden', name !== 'list');
+    cdStageForm.classList.toggle('hidden', name !== 'form');
+  }
+
+  function enterFormStage(selection) {
+    pendingSelection = selection;
+    cdFormName.textContent = selection.name;
+    const metaParts = [];
+    if (selection.type) metaParts.push(selection.type);
+    if (selection.city) metaParts.push(selection.city);
+    if (selection.address) metaParts.push(selection.address);
+    if (selection.distance_m != null) metaParts.unshift(`${selection.distance_m}m`);
+    cdFormMeta.textContent = metaParts.join(' · ');
+    showStage('form');
+    // Focus the activity chips area on enter, but don't open mobile keyboard.
+    setTimeout(() => cdSubmit.focus(), 0);
+  }
+
+  function renderPoiList(pois, gps) {
+    cdList.innerHTML = '';
+    if (!pois.length) {
+      cdList.innerHTML = '<div class="cd-empty">附近没找到 POI<br><small>输入下方名字手动打卡</small></div>';
+      return;
+    }
+    for (const p of pois) {
+      const row = document.createElement('div');
+      row.className = 'cd-row ' + (p.source || '');
+      row.setAttribute('role', 'listitem');
+      const pinIcon = (window.icon && window.icon('pin', 18)) || '📍';
+      const meta = [p.type, p.city, p.address].filter(Boolean).join(' · ');
+      row.innerHTML = `
+        <span class="cd-icon">${pinIcon}</span>
+        <div class="cd-main">
+          <span class="cd-name"></span>
+          <span class="cd-meta"><span class="cd-dist"></span><span class="cd-meta-info"></span></span>
+        </div>
+      `;
+      row.querySelector('.cd-name').textContent = p.name;
+      row.querySelector('.cd-dist').textContent = `${p.distance_m}m`;
+      row.querySelector('.cd-meta-info').textContent = meta || (p.source === 'osm' ? 'OSM' : '');
+      row.addEventListener('click', () => {
+        const selection = {
+          name: p.name,
+          source: 'poi',
+          gps: gps ? { lat: gps.lat, lng: gps.lng, accuracy_m: gps.accuracy_m } : null,
+          osm_id: p.osm_id || '',
+          amap_poi_id: p.amap_poi_id || '',
+          fsq_id: p.fsq_id || '',
+          type: p.type || '',
+          city: p.city || '',
+          address: p.address || '',
+          distance_m: p.distance_m,
+        };
+        enterFormStage(selection);
+      });
+      cdList.appendChild(row);
+    }
+  }
+
+  function stageManualEntry(gps) {
+    const raw = cdManualName.value.trim();
+    if (!raw) {
+      cdManualName.focus();
+      return;
+    }
+    enterFormStage({
+      name: raw,
+      source: 'manual',
+      gps: gps ? { lat: gps.lat, lng: gps.lng, accuracy_m: gps.accuracy_m } : null,
+      osm_id: '', amap_poi_id: '', fsq_id: '',
+      type: '', city: '', address: '',
+      distance_m: null,
+    });
+  }
+
+  // Activity-chip single-select
+  cdActivity.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-val]');
+    if (!btn) return;
+    e.preventDefault();
+    const active = btn.classList.contains('active');
+    cdActivity.querySelectorAll('button').forEach((b) => b.classList.remove('active'));
+    if (!active) btn.classList.add('active');
+  });
+
+  cdScore.addEventListener('input', () => {
+    const v = parseInt(cdScore.value, 10);
+    cdScoreVal.textContent = v > 0 ? `${v}/10` : '—';
+  });
+
+  cdBack.addEventListener('click', () => showStage('list'));
+
+  cdSubmit.addEventListener('click', () => {
+    if (!pendingSelection) return;
+    const fields = {
+      name: pendingSelection.name,
+      build_location: !!cdBuildLoc.checked,
+    };
+    if (pendingSelection.gps) {
+      fields.gps = [pendingSelection.gps.lat, pendingSelection.gps.lng];
+      if (pendingSelection.gps.accuracy_m != null) {
+        fields.accuracy_m = pendingSelection.gps.accuracy_m;
+      }
+    }
+    if (pendingSelection.osm_id)      fields.osm_id = pendingSelection.osm_id;
+    if (pendingSelection.amap_poi_id) fields.amap_poi_id = pendingSelection.amap_poi_id;
+    if (pendingSelection.type)        fields.type = pendingSelection.type;
+    if (pendingSelection.city)        fields.city = pendingSelection.city;
+    if (pendingSelection.address)     fields.address = pendingSelection.address;
+
+    const activeChip = cdActivity.querySelector('button.active');
+    if (activeChip) fields.activity_type = activeChip.dataset.val;
+    const amountRaw = cdAmount.value.trim();
+    if (amountRaw) {
+      const amt = Number(amountRaw);
+      if (Number.isFinite(amt) && amt >= 0) {
+        fields.amount = amt;
+        if (cdCurrency.value) {
+          fields.currency = cdCurrency.value;
+          const rate = FX_TO_USD[cdCurrency.value];
+          if (rate != null) fields.rate = rate;
+        }
+      }
+    }
+    const scoreVal = parseInt(cdScore.value, 10);
+    if (scoreVal > 0) fields.score = scoreVal;
+    const noteRaw = cdNote.value.trim();
+    if (noteRaw) fields.note = noteRaw;
+
+    sendCheckin(fields);
+    checkinDialog.close();
+  });
+
+  async function openCheckinDialog() {
+    if (!checkinDialog || !checkinDialog.showModal) {
+      // Fallback for ancient browsers — keep the Step 2 behaviour alive.
+      const name = prompt('打卡店名 / 地点:');
+      if (name && name.trim()) {
+        const cached = loadCachedGps();
+        const fields = { name: name.trim(), build_location: true };
+        if (cached) { fields.gps = [cached.lat, cached.lng]; fields.accuracy_m = cached.accuracy_m; }
+        sendCheckin(fields);
+      }
+      return;
+    }
+
+    // Reset + open.
+    cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>正在定位…</div>';
+    cdStatus.textContent = '正在定位…';
+    cdStatus.className = 'cd-status';
+    cdManualName.value = '';
+    checkinDialog.showModal();
+
+    // Wire manual-entry button to current GPS context (transitions to form stage).
+    let currentGps = loadCachedGps();
+    const onManualGo = () => stageManualEntry(currentGps);
+    cdManualGo.onclick = onManualGo;
+    cdManualName.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); onManualGo(); }
+    };
+
+    // Tiny inline haversine — same formula as the server uses, in metres.
+    const _distM = (a, b) => {
+      const R = 6371000, toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+      const s = Math.sin(dLat / 2) ** 2
+              + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return 2 * R * Math.asin(Math.sqrt(s));
+    };
+
+    // If we have a fresh-enough cached fix, show POIs immediately.
+    if (currentGps) {
+      cdStatus.textContent = `位置 (缓存) · acc ${currentGps.accuracy_m}m · 刷新中`;
+      cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
+      const pois = await searchNearby(currentGps.lat, currentGps.lng);
+      if (checkinDialog.open) renderPoiList(pois, currentGps);
+    }
+
+    // Get a fresh fix in the background.
+    const fresh = await requestGps(10000);
+    if (!checkinDialog.open) return;
+
+    if (!fresh) {
+      if (!currentGps) {
+        cdStatus.textContent = '无法获取位置 — 可手动输入';
+        cdStatus.className = 'cd-status error';
+        cdList.innerHTML = '<div class="cd-empty">没有定位信息<br><small>可在下方手动输入打卡名</small></div>';
+      } else {
+        cdStatus.textContent = `位置 (缓存) · acc ${currentGps.accuracy_m}m`;
+        cdStatus.className = 'cd-status';
+      }
+      return;
+    }
+
+    // If fresh is essentially the same spot, just update the status — keep
+    // the already-rendered POIs to avoid the "list flashes twice" effect.
+    if (currentGps && _distM(currentGps, fresh) < 30) {
+      currentGps = fresh;     // adopt newer accuracy / timestamp for manual entry
+      cdStatus.textContent = `位置 · acc ${fresh.accuracy_m}m`;
+      cdStatus.className = 'cd-status ready';
+      return;
+    }
+
+    // Moved meaningfully (or no cache to begin with) — re-query.
+    currentGps = fresh;
+    cdStatus.textContent = `位置 · acc ${fresh.accuracy_m}m`;
+    cdStatus.className = 'cd-status ready';
+    cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
+    const pois = await searchNearby(fresh.lat, fresh.lng);
+    if (checkinDialog.open) renderPoiList(pois, fresh);
+  }
 
   // ---------- top menu ----------
   menuBtn.addEventListener('click', (e) => {
@@ -1085,38 +1722,6 @@
     }
   }
 
-  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-
-  // Track whether the most recent gesture on ➕ was an upward swipe.
-  // Tap → directly invoke the system file picker (Android shows its native
-  // "Choose an action" sheet, iOS shows photo/camera/files chooser).
-  // Swipe-up → open our small popover with [📋 剪贴板, 📄 其他选项], so the
-  // clipboard option is reachable even when system gestures interfere.
-  let attachSwipeOpened = false;
-  if (isTouch) {
-    let ts = null;
-    attachBtn.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1) { ts = null; return; }
-      const t = e.touches[0];
-      ts = { x: t.clientX, y: t.clientY, time: Date.now(), swiped: false };
-    }, { passive: true });
-    attachBtn.addEventListener('touchmove', (e) => {
-      if (!ts) return;
-      const t = e.touches[0];
-      if (ts.y - t.clientY > 18 && Math.abs(t.clientX - ts.x) < 40) ts.swiped = true;
-    }, { passive: true });
-    attachBtn.addEventListener('touchend', (e) => {
-      if (!ts) return;
-      const dt = Date.now() - ts.time;
-      if (ts.swiped && dt < 800) {
-        e.preventDefault();          // suppress the synthetic click
-        attachSwipeOpened = true;
-        attachMenu.classList.remove('hidden');
-      }
-      ts = null;
-    });
-  }
-
   if (pasteBtn) {
     pasteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1124,15 +1729,10 @@
     });
   }
 
+  // ⬆ button toggles the upward-expanding menu (checkin / attachments / etc.)
   attachBtn.addEventListener('click', (e) => {
-    if (attachSwipeOpened) { attachSwipeOpened = false; return; }
-    if (!isTouch) { fileInput.click(); return; }
     e.stopPropagation();
-    // Tap on touch: open the photo gallery directly (image/* only, no
-    // `multiple`). Single-image accept="image/*" inputs are more likely to
-    // route to Chrome's Android Photo Picker / system Gallery than the
-    // generic file manager.
-    (galleryInput || albumInput).click();
+    attachMenu.classList.toggle('hidden');
   });
 
   if (attachMenu) {
@@ -1141,12 +1741,13 @@
       if (!btn) return;
       attachMenu.classList.add('hidden');
       const pick = btn.dataset.pick;
-      if (pick === 'clipboard') pasteFromClipboard();
-      else if (pick === 'other') fileInput.click();
-      // legacy picks kept for backward-compat with cached HTML
+      if (pick === 'checkin') openCheckinDialog();
+      else if (pick === 'clipboard') pasteFromClipboard();
       else if (pick === 'camera') cameraInput.click();
       else if (pick === 'album') albumInput.click();
       else if (pick === 'file') fileInput.click();
+      else if (pick === 'cwd-file') openCwdBrowser('file');
+      else if (pick === 'other') fileInput.click();
     });
     document.addEventListener('click', (e) => {
       if (attachMenu.classList.contains('hidden')) return;
@@ -1382,7 +1983,7 @@
     document.getElementById('cwd-modal').classList.add('hidden');
   }
 
-  filePickBtn.addEventListener('click', () => openCwdBrowser('file'));
+  if (filePickBtn) filePickBtn.addEventListener('click', () => openCwdBrowser('file'));
 
   // ---------- push notifications ----------
   function urlBase64ToUint8Array(b64) {
