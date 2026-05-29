@@ -1450,6 +1450,55 @@ body.mode-chat .app-bar .cwd { display: none; }
 #model-menu .model-item .label { font-weight: 500; color: var(--text); }
 #model-menu .model-item .desc { font-size: 11px; color: var(--text-3); }
 
+/* YOLO toggle row in the model menu */
+#model-menu .yolo-toggle {
+  position: relative;
+  padding-right: 38px;
+  border-radius: 8px;
+}
+#model-menu .yolo-toggle.on .label { color: #f59e0b; }
+#model-menu .yolo-toggle .yolo-dot {
+  position: absolute;
+  right: 12px; top: 50%;
+  width: 24px; height: 14px;
+  border-radius: 7px;
+  background: var(--bg-4);
+  border: 1px solid var(--line-2);
+  transform: translateY(-50%);
+  transition: background .15s, border-color .15s;
+}
+#model-menu .yolo-toggle .yolo-dot::after {
+  content: '';
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: transform .15s, background .15s;
+}
+#model-menu .yolo-toggle .yolo-dot.on {
+  background: rgba(245, 158, 11, .25);
+  border-color: #f59e0b;
+}
+#model-menu .yolo-toggle .yolo-dot.on::after {
+  background: #f59e0b;
+  transform: translateX(10px);
+}
+#model-menu .model-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 8px;
+}
+
+/* When YOLO is on, give the model pill itself a warm halo so it's obvious
+   at a glance — even with the menu closed — that confirmations are off. */
+.model-pill.yolo {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245,158,11,.35), 0 0 12px rgba(245,158,11,.25);
+  color: #f59e0b;
+}
+.model-pill.yolo:hover { border-color: #f59e0b; color: #f59e0b; }
+
 /* ---------- usage modal ---------- */
 .usage-modal .modal {
   width: 92vw; max-width: 600px;

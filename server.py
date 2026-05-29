@@ -171,6 +171,11 @@ class AppState:
     sdk_session_id: str | None = None    # SDK's session_id, captured per turn
     mode: str = "code"                   # 'code' | 'chat'
     model: str = ""                      # model alias or "" for default
+    # YOLO toggle: when on, can_use_tool auto-approves every tool call instead
+    # of broadcasting permission_request. Deliberately NOT persisted — resets
+    # to False on every service restart so it can't quietly stay on across
+    # deploys.
+    auto_approve: bool = False
 
     def __post_init__(self):
         self.cwd = self.cwd_root
@@ -250,6 +255,16 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
                 ("curl " in cmd or "curl\n" in cmd):
             return PermissionResultAllow(behavior="allow", updated_input=None)
     if tool_name in AUTO_ALLOW:
+        return PermissionResultAllow(behavior="allow", updated_input=None)
+
+    # YOLO toggle: skip the phone prompt entirely. Still surface the
+    # tool call in the chat as a system message so the user has audit
+    # trail of what got auto-run while they were away.
+    if state.auto_approve:
+        await broadcast({
+            "type": "system",
+            "msg": f"🚀 auto-approved {tool_name}",
+        })
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
     cb_id = secrets.token_urlsafe(8)
@@ -1656,6 +1671,7 @@ async def ws_handler(ws: WebSocket):
             "type": "hello",
             "cwd": _to_rel(state.cwd),
             "session_id": state.session_id,
+            "auto_approve": state.auto_approve,
         }
         if state.session_id:
             sess = db.get_session(state.session_id)
@@ -1770,6 +1786,21 @@ async def handle_cmd(msg: dict) -> None:
             await open_session(target_sid)
         else:
             await new_session(mode=new_mode)
+    elif name == "set_auto_approve":
+        new_val = bool(msg.get("value"))
+        if new_val == state.auto_approve:
+            return
+        state.auto_approve = new_val
+        await broadcast({
+            "type": "auto_approve_changed",
+            "value": state.auto_approve,
+        })
+        await broadcast({
+            "type": "system",
+            "msg": ("🚀 自动批准已开启 — 后续工具调用不再询问"
+                    if state.auto_approve
+                    else "🛑 自动批准已关闭 — 恢复逐次询问"),
+        })
     elif name == "set_model":
         new_model = msg.get("model") or ""
         valid_ids = {m["id"] for m in AVAILABLE_MODELS}

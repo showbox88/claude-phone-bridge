@@ -48,6 +48,7 @@
   let currentSessionTitle = '';
   let currentMode = 'code';
   let currentModel = '';
+  let autoApprove = false;
   let META = { modes: [], models: [] };
   let isResponding = false;  // true while Claude is generating a turn
 
@@ -732,10 +733,25 @@
 
   function setModel(model) {
     currentModel = model || '';
+    refreshModelPill();
+  }
+
+  function refreshModelPill() {
     const labelEl = document.getElementById('model-label');
     if (!labelEl) return;
     const m = (META.models || []).find((x) => x.id === currentModel);
-    labelEl.textContent = (m && m.label) || '默认';
+    const base = (m && m.label) || '默认';
+    labelEl.textContent = autoApprove ? `🚀 ${base}` : base;
+    const btn = document.getElementById('model-btn');
+    if (btn) btn.classList.toggle('yolo', autoApprove);
+  }
+
+  function setAutoApprove(value) {
+    autoApprove = !!value;
+    refreshModelPill();
+    // Re-render menu if it's open so the toggle row reflects current state.
+    const menu = document.getElementById('model-menu');
+    if (menu && !menu.classList.contains('hidden')) renderModelMenu();
   }
 
   // ---------- session list ----------
@@ -924,6 +940,7 @@
     switch (msg.type) {
       case 'hello': {
         currentSessionId = msg.session_id || null;
+        setAutoApprove(!!msg.auto_approve);
         if (msg.session) {
           setHeader(msg.session.title, msg.session.cwd);
           setMode(msg.session.mode);
@@ -972,6 +989,11 @@
         break;
       case 'session_model_changed':
         if (msg.id === currentSessionId) setModel(msg.model);
+        break;
+      case 'auto_approve_changed':
+        // Sync the YOLO toggle across every connected client (other tabs,
+        // desktop browser, phone).
+        setAutoApprove(!!msg.value);
         break;
       case 'system':
         appendSystem(msg.msg || '');
@@ -1496,6 +1518,28 @@
 
   function renderModelMenu() {
     modelMenu.innerHTML = '';
+
+    // YOLO toggle — sits above the model list. Clicking does not close the
+    // menu so the user can confirm the visual state change before dismissing.
+    const yolo = document.createElement('button');
+    yolo.type = 'button';
+    yolo.className = 'model-item yolo-toggle' + (autoApprove ? ' on' : '');
+    yolo.innerHTML = `
+      <span class="label">🚀 自动批准请求</span>
+      <span class="desc">${autoApprove ? '已开启 · 点击关闭' : '关闭 · 点击开启'}</span>
+      <span class="yolo-dot${autoApprove ? ' on' : ''}"></span>`;
+    yolo.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = !autoApprove;
+      setAutoApprove(next);
+      send({ type: 'cmd', name: 'set_auto_approve', value: next });
+    });
+    modelMenu.appendChild(yolo);
+
+    const sep = document.createElement('div');
+    sep.className = 'model-sep';
+    modelMenu.appendChild(sep);
+
     for (const m of META.models || []) {
       const item = document.createElement('button');
       item.type = 'button';
