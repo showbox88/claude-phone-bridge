@@ -422,6 +422,20 @@ def pb_update(collection: str, id: str, data: dict) -> dict:
 
 
 @mcp.tool()
+def pb_delete(collection: str, id: str) -> dict:
+    """Permanently delete a record. Irreversible. Per Smart Note rules,
+    prefer `pb_update(coll, id, {"status": "Archived"})` for normal mistakes.
+    Use real delete only when the user explicitly asks ("hard delete",
+    "really remove", "彻底删掉"), or for obvious garbage like duplicate
+    rows / test scaffolding / records the user never saw.
+
+    Returns {"ok": true, "deleted": id} on success.
+    """
+    _pb("DELETE", f"/api/collections/{collection}/records/{id}")
+    return {"ok": True, "collection": collection, "deleted": id}
+
+
+@mcp.tool()
 def pb_create_collection(name: str, fields: list, type: str = "base") -> dict:
     """Create a new PocketBase collection (table).
 

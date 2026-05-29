@@ -90,10 +90,10 @@ def _pb_refresh_token() -> bool:
 
 
 async def _pb_refresh_loop() -> None:
-    """Re-auth every 30 min so PB_TOKEN never expires under Claude's feet."""
+    """Re-auth every 12 h so PB_TOKEN never expires under Claude's feet."""
     while True:
         try:
-            await asyncio.sleep(1800)
+            await asyncio.sleep(43200)
             await asyncio.to_thread(_pb_refresh_token)
         except asyncio.CancelledError:
             break
@@ -1127,10 +1127,11 @@ async def mkdir(body: dict):
 # ---------- REST: sessions ----------
 
 @app.get("/api/sessions")
-async def api_sessions_list():
+async def api_sessions_list(q: str = ""):
     return {
         "current": state.session_id,
-        "sessions": db.list_sessions(),
+        "sessions": db.search_sessions(q) if q.strip() else db.list_sessions(),
+        "query": q,
     }
 
 

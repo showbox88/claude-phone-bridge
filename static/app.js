@@ -3,6 +3,17 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
+
+  // Asset cache version — parsed from this script's own `?v=N` query so it
+  // updates automatically when index.html bumps the version. Rendered in the
+  // app-bar so refresh state is visible at a glance.
+  (() => {
+    const m = (document.currentScript && document.currentScript.src ||
+               document.querySelector('script[src*="app.js?v="]')?.src || '')
+              .match(/[?&]v=(\d+)/);
+    const el = $('app-version');
+    if (el) el.textContent = m ? 'v' + m[1] : '';
+  })();
   const messagesScroll = $('messages');
   const messages = messagesScroll.querySelector('.messages-inner') || messagesScroll;
   const emptyState = $('empty-state');
@@ -20,7 +31,7 @@
   const attachMenu = $('attach-menu');
   const albumInput = $('album-input');
   const galleryInput = $('gallery-input');
-  const filePickBtn = $('file-pick-btn');
+  const filePickBtn = $('file-pick-btn'); // legacy; may be null after menu consolidation
   const fileInput = $('file-input');
   const cameraInput = $('camera-input');
   const attachBar = $('attach-bar');
@@ -30,6 +41,8 @@
   const drawerClose = $('drawer-close');
   const newSessionBtn = $('new-session-btn');
   const sessionListEl = $('session-list');
+  const sessionSearch = $('session-search');
+  const sessionSearchClear = $('session-search-clear');
 
   let currentSessionId = null;
   let currentSessionTitle = '';
@@ -726,10 +739,32 @@
   }
 
   // ---------- session list ----------
-  async function loadSessionList() {
+  // HTML-escape + highlight occurrences of `q` (case-insensitive) using <mark>.
+  function highlightMatch(text, q) {
+    const escape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                          .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    if (!q) return escape(text);
+    const lower = text.toLowerCase();
+    const qLow = q.toLowerCase();
+    let out = '', i = 0;
+    while (i < text.length) {
+      const idx = lower.indexOf(qLow, i);
+      if (idx < 0) { out += escape(text.slice(i)); break; }
+      out += escape(text.slice(i, idx));
+      out += '<mark>' + escape(text.slice(idx, idx + q.length)) + '</mark>';
+      i = idx + q.length;
+    }
+    return out;
+  }
+
+  async function loadSessionList(query) {
+    // No arg → reuse the current search box value so refreshes preserve filter.
+    if (query === undefined) query = sessionSearch ? sessionSearch.value : '';
+    const q = (query || '').trim();
     let data;
     try {
-      const r = await fetch(apiUrl('/api/sessions'));
+      const url = q ? `/api/sessions?q=${encodeURIComponent(q)}` : '/api/sessions';
+      const r = await fetch(apiUrl(url));
       if (!r.ok) return;
       data = await r.json();
     } catch (_) { return; }
@@ -738,9 +773,11 @@
     if (filtered.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding: 20px 12px; text-align: center; color: var(--text-3); font-size: 13px;';
-      empty.textContent = currentMode === 'chat'
-        ? '没有 Chat 会话，点 ＋ 新建一个'
-        : '没有 Code 会话，点 ＋ 新建一个';
+      empty.textContent = q
+        ? `没有匹配「${q}」的会话`
+        : (currentMode === 'chat'
+            ? '没有 Chat 会话，点 ＋ 新建一个'
+            : '没有 Code 会话，点 ＋ 新建一个');
       sessionListEl.appendChild(empty);
       return;
     }
@@ -753,24 +790,42 @@
       const date = new Date((s.updated_at || s.created_at) * 1000);
       const meta = `${date.toLocaleString('zh-CN', { hour12: false })} · ${s.msg_count}条`;
       const badgeIcon = (window.icon && window.icon(mode === 'chat' ? 'chat' : 'code', 13)) || '';
+      const editIcon = (window.icon && window.icon('edit', 14)) || '✎';
       const trashIcon = (window.icon && window.icon('trash', 16)) || '×';
       item.innerHTML = `
         <span class="si-badge"></span>
         <div class="si-main">
           <div class="si-title"></div>
           <div class="si-meta"></div>
+          <div class="si-snippet hidden"></div>
         </div>
+        <button class="si-edit" type="button" title="编辑标题"></button>
         <button class="si-del" type="button" title="删除"></button>
       `;
       item.querySelector('.si-badge').innerHTML = badgeIcon;
+      item.querySelector('.si-edit').innerHTML = editIcon;
       item.querySelector('.si-del').innerHTML = trashIcon;
-      item.querySelector('.si-title').textContent = t;
+      // Highlight matches in title when searching; snippet shows matched body text
+      item.querySelector('.si-title').innerHTML = highlightMatch(t, q);
       item.querySelector('.si-meta').textContent = meta;
+      const snipEl = item.querySelector('.si-snippet');
+      if (q && s.match_snippet) {
+        snipEl.innerHTML = highlightMatch(s.match_snippet, q);
+        snipEl.classList.remove('hidden');
+      }
       item.addEventListener('click', () => {
         if (s.id !== currentSessionId) {
           send({ type: 'cmd', name: 'load_session', id: s.id });
         }
-        closeDrawer();
+        if (!isDesktopDrawer()) closeDrawer();
+      });
+      item.querySelector('.si-edit').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const next = prompt('会话标题:', s.title || '');
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (trimmed === (s.title || '').trim()) return;
+        send({ type: 'cmd', name: 'rename_session', id: s.id, title: trimmed });
       });
       item.querySelector('.si-del').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -781,25 +836,87 @@
     }
   }
 
+  // Search box → debounced reload of session list with `q`.
+  let searchDebounce = null;
+  let lastSearchQuery = '';
+  function applySearch(immediate = false) {
+    const q = sessionSearch ? sessionSearch.value : '';
+    if (sessionSearchClear) sessionSearchClear.classList.toggle('hidden', !q);
+    const run = () => {
+      if (q === lastSearchQuery) return;
+      lastSearchQuery = q;
+      loadSessionList(q);
+    };
+    if (immediate) { clearTimeout(searchDebounce); run(); return; }
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(run, 180);
+  }
+  if (sessionSearch) {
+    sessionSearch.addEventListener('input', () => applySearch(false));
+    sessionSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && sessionSearch.value) {
+        sessionSearch.value = '';
+        applySearch(true);
+      }
+    });
+  }
+  if (sessionSearchClear) {
+    sessionSearchClear.addEventListener('click', () => {
+      sessionSearch.value = '';
+      sessionSearch.focus();
+      applySearch(true);
+    });
+  }
+
+  // Desktop drawer uses `body.drawer-expanded` (grid column toggle).
+  // Mobile drawer uses the existing `.drawer.hidden` overlay.
+  const desktopDrawerMql = window.matchMedia('(min-width: 768px)');
+  const DRAWER_KEY = 'bridge.drawer_expanded';
+
+  function isDesktopDrawer() { return desktopDrawerMql.matches; }
+
   function openDrawer() {
-    drawer.classList.remove('hidden');
-    drawerMask.classList.remove('hidden');
+    if (isDesktopDrawer()) {
+      document.body.classList.add('drawer-expanded');
+      localStorage.setItem(DRAWER_KEY, '1');
+    } else {
+      drawer.classList.remove('hidden');
+      drawerMask.classList.remove('hidden');
+    }
     drawer.setAttribute('aria-hidden', 'false');
     loadSessionList();
   }
   function closeDrawer() {
-    drawer.classList.add('hidden');
-    drawerMask.classList.add('hidden');
+    if (isDesktopDrawer()) {
+      document.body.classList.remove('drawer-expanded');
+      localStorage.setItem(DRAWER_KEY, '0');
+    } else {
+      drawer.classList.add('hidden');
+      drawerMask.classList.add('hidden');
+    }
     drawer.setAttribute('aria-hidden', 'true');
   }
+  function toggleDrawer() {
+    if (isDesktopDrawer()) {
+      if (document.body.classList.contains('drawer-expanded')) closeDrawer();
+      else openDrawer();
+    } else {
+      openDrawer();
+    }
+  }
 
-  drawerBtn.addEventListener('click', openDrawer);
+  // Default: collapsed. Restore expanded state from localStorage on desktop only.
+  if (isDesktopDrawer() && localStorage.getItem(DRAWER_KEY) === '1') {
+    document.body.classList.add('drawer-expanded');
+    loadSessionList();
+  }
+
+  drawerBtn.addEventListener('click', toggleDrawer);
   drawerClose.addEventListener('click', closeDrawer);
   drawerMask.addEventListener('click', closeDrawer);
   newSessionBtn.addEventListener('click', () => {
-    // create a new session in the current workspace mode
     send({ type: 'cmd', name: 'new_session', mode: currentMode });
-    closeDrawer();
+    if (!isDesktopDrawer()) closeDrawer();
   });
 
   // ---------- event router ----------
@@ -1333,11 +1450,6 @@
     if (checkinDialog.open) renderPoiList(pois, fresh);
   }
 
-  const checkinFab = $('checkin-fab');
-  if (checkinFab) {
-    checkinFab.addEventListener('click', openCheckinDialog);
-  }
-
   // ---------- top menu ----------
   menuBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1610,38 +1722,6 @@
     }
   }
 
-  const isTouch = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
-
-  // Track whether the most recent gesture on ➕ was an upward swipe.
-  // Tap → directly invoke the system file picker (Android shows its native
-  // "Choose an action" sheet, iOS shows photo/camera/files chooser).
-  // Swipe-up → open our small popover with [📋 剪贴板, 📄 其他选项], so the
-  // clipboard option is reachable even when system gestures interfere.
-  let attachSwipeOpened = false;
-  if (isTouch) {
-    let ts = null;
-    attachBtn.addEventListener('touchstart', (e) => {
-      if (e.touches.length !== 1) { ts = null; return; }
-      const t = e.touches[0];
-      ts = { x: t.clientX, y: t.clientY, time: Date.now(), swiped: false };
-    }, { passive: true });
-    attachBtn.addEventListener('touchmove', (e) => {
-      if (!ts) return;
-      const t = e.touches[0];
-      if (ts.y - t.clientY > 18 && Math.abs(t.clientX - ts.x) < 40) ts.swiped = true;
-    }, { passive: true });
-    attachBtn.addEventListener('touchend', (e) => {
-      if (!ts) return;
-      const dt = Date.now() - ts.time;
-      if (ts.swiped && dt < 800) {
-        e.preventDefault();          // suppress the synthetic click
-        attachSwipeOpened = true;
-        attachMenu.classList.remove('hidden');
-      }
-      ts = null;
-    });
-  }
-
   if (pasteBtn) {
     pasteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1649,15 +1729,10 @@
     });
   }
 
+  // ⬆ button toggles the upward-expanding menu (checkin / attachments / etc.)
   attachBtn.addEventListener('click', (e) => {
-    if (attachSwipeOpened) { attachSwipeOpened = false; return; }
-    if (!isTouch) { fileInput.click(); return; }
     e.stopPropagation();
-    // Tap on touch: open the photo gallery directly (image/* only, no
-    // `multiple`). Single-image accept="image/*" inputs are more likely to
-    // route to Chrome's Android Photo Picker / system Gallery than the
-    // generic file manager.
-    (galleryInput || albumInput).click();
+    attachMenu.classList.toggle('hidden');
   });
 
   if (attachMenu) {
@@ -1666,12 +1741,13 @@
       if (!btn) return;
       attachMenu.classList.add('hidden');
       const pick = btn.dataset.pick;
-      if (pick === 'clipboard') pasteFromClipboard();
-      else if (pick === 'other') fileInput.click();
-      // legacy picks kept for backward-compat with cached HTML
+      if (pick === 'checkin') openCheckinDialog();
+      else if (pick === 'clipboard') pasteFromClipboard();
       else if (pick === 'camera') cameraInput.click();
       else if (pick === 'album') albumInput.click();
       else if (pick === 'file') fileInput.click();
+      else if (pick === 'cwd-file') openCwdBrowser('file');
+      else if (pick === 'other') fileInput.click();
     });
     document.addEventListener('click', (e) => {
       if (attachMenu.classList.contains('hidden')) return;
@@ -1907,7 +1983,7 @@
     document.getElementById('cwd-modal').classList.add('hidden');
   }
 
-  filePickBtn.addEventListener('click', () => openCwdBrowser('file'));
+  if (filePickBtn) filePickBtn.addEventListener('click', () => openCwdBrowser('file'));
 
   // ---------- push notifications ----------
   function urlBase64ToUint8Array(b64) {
