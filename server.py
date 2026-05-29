@@ -1020,15 +1020,25 @@ async def api_health(request: Request):
 # ---------- REST: today's todos (drives the header bell) ----------
 
 def _today_ack_path() -> Path:
-    return state.cwd_root / ".bridge_data" / "today_ack.json"
+    """Co-located with the server script so the path is stable regardless of
+    DEFAULT_CWD or the user navigating to a different cwd at runtime."""
+    return Path(__file__).parent / ".bridge_data" / "today_ack.json"
+
+
+class _PBError(Exception):
+    """PocketBase query failed (network, auth, or HTTP error). Raised by
+    `_pb_get_json` so callers can distinguish 'no data today' from 'we
+    couldn't reach PB at all' instead of silently returning an empty list."""
 
 
 def _pb_get_json(path: str) -> dict:
-    """GET a PocketBase admin endpoint with auto-retry on 401."""
+    """GET a PocketBase admin endpoint with auto-retry on 401. Raises
+    _PBError on persistent failure."""
     if not POCKETBASE_URL:
-        return {"items": []}
+        raise _PBError("PocketBase not configured")
     token = os.environ.get("PB_TOKEN", "")
     url = POCKETBASE_URL + path
+    last_err: Exception | None = None
     for attempt in (0, 1):
         req = urllib.request.Request(url,
             headers={"Authorization": token} if token else {})
@@ -1036,15 +1046,16 @@ def _pb_get_json(path: str) -> dict:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
+            last_err = e
             if e.code == 401 and attempt == 0 and _pb_refresh_token():
                 token = os.environ.get("PB_TOKEN", "")
                 continue
-            log.warning("PB GET %s failed: %s", path, e)
-            return {"items": []}
+            break
         except (urllib.error.URLError, OSError) as e:
-            log.warning("PB GET %s network error: %s", path, e)
-            return {"items": []}
-    return {"items": []}
+            last_err = e
+            break
+    log.warning("PB GET %s failed: %s", path, last_err)
+    raise _PBError(str(last_err))
 
 
 def _today_todos_query() -> list[dict]:
@@ -1088,11 +1099,19 @@ def _save_today_ack(d: dict) -> None:
 @app.get("/api/today-todos")
 async def api_today_todos():
     """Return today's pending todos for the header bell. Auth is enforced by
-    the global middleware (path is not in `_PUBLIC_EXACT`)."""
-    items = await asyncio.to_thread(_today_todos_query)
+    the global middleware (path is not in `_PUBLIC_EXACT`).
+
+    On PB unreachable: returns {"ok": false, "error": "pb_unreachable"} so the
+    client can keep its last-known bell state instead of treating the outage
+    as 'no todos today'."""
+    try:
+        items = await asyncio.to_thread(_today_todos_query)
+    except _PBError as e:
+        return {"ok": False, "error": "pb_unreachable", "detail": str(e)}
     sig = _today_signature(items)
     ack = await asyncio.to_thread(_load_today_ack)
     return {
+        "ok": True,
         "count": len(items),
         "items": items,
         "signature": sig,

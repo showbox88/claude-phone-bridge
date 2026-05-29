@@ -2052,7 +2052,17 @@
     try {
       const r = await fetch(apiUrl('/api/today-todos'));
       if (!r.ok) return;
-      bellState = await r.json();
+      const data = await r.json();
+      // Server is up but PocketBase isn't. Keep the bell's last-known state
+      // instead of flashing back to "no todos today" — an outage shouldn't
+      // look the same as an empty list.
+      if (data.ok === false) {
+        if (notifBtn.title.indexOf('待办') < 0) {
+          notifBtn.title = '待办数据暂不可用';
+        }
+        return;
+      }
+      bellState = data;
       applyBellUI();
     } catch (e) { /* offline ok */ }
   }
