@@ -2027,15 +2027,95 @@
       sysMsg('推送启用失败: ' + e.message);
     }
   }
-  notifBtn.addEventListener('click', setupPush);
+  // (setupPush kept for future use — bell click now drives today's-todos panel.)
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => { /* ignore */ });
   }
 
+  // ---------- today's todos bell ----------
+  let bellState = { count: 0, items: [], signature: '', acked: true };
+
+  function applyBellUI() {
+    const needAlert = bellState.count > 0 && !bellState.acked;
+    notifBtn.classList.toggle('alert', needAlert);
+    if (bellState.count === 0) {
+      notifBtn.title = '今天没有待办';
+    } else if (bellState.acked) {
+      notifBtn.title = `今天有 ${bellState.count} 件待办（已查看）`;
+    } else {
+      notifBtn.title = `今天有 ${bellState.count} 件待办`;
+    }
+  }
+
+  async function checkBell() {
+    try {
+      const r = await fetch(apiUrl('/api/today-todos'));
+      if (!r.ok) return;
+      bellState = await r.json();
+      applyBellUI();
+    } catch (e) { /* offline ok */ }
+  }
+
+  function fmtDue(s) {
+    if (!s) return '无截止';
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
+
+  async function openBellPanel() {
+    await checkBell();
+    const overlay = document.createElement('div');
+    overlay.className = 'bell-modal';
+    const rows = bellState.items.map((t) => {
+      const prio = (t.priority || 'Normal').toLowerCase();
+      return `
+        <div class="bell-row prio-${prio}">
+          <div class="bell-pri"></div>
+          <div class="bell-body">
+            <div class="bell-text">${escapeHtml(t.title || '(无标题)')}</div>
+            <div class="bell-meta">${escapeHtml(fmtDue(t.due_date))} · ${escapeHtml(t.priority || 'Normal')}</div>
+          </div>
+        </div>`;
+    }).join('');
+    overlay.innerHTML = `
+      <div class="bell-card" role="dialog" aria-modal="true" aria-label="今天的待办">
+        <div class="bell-head">
+          <div class="bell-title">今天的待办 (${bellState.count})</div>
+          <button class="icon-btn close-bell" type="button" data-icon="close" data-icon-size="18" aria-label="关闭"></button>
+        </div>
+        <div class="bell-list">${rows || '<div class="bell-empty">今天没什么要做的 ✨</div>'}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    if (window.hydrateIcons) window.hydrateIcons(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.close-bell').addEventListener('click', close);
+
+    if (bellState.signature && bellState.count > 0 && !bellState.acked) {
+      try {
+        await fetch(apiUrl('/api/today-todos/ack'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signature: bellState.signature }),
+        });
+      } catch (_) { /* ignore */ }
+      bellState.acked = true;
+      applyBellUI();
+    }
+  }
+
+  notifBtn.addEventListener('click', openBellPanel);
+  checkBell();
+  setInterval(checkBell, 60_000);
+
   // ---------- visibility re-focus ----------
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && currentSource && (!ws || ws.readyState !== 1)) connect();
+    if (!document.hidden) checkBell();
   });
 
   // ---------- source picker ----------

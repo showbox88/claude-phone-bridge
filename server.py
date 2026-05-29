@@ -57,7 +57,9 @@ log = logging.getLogger("bridge")
 # Claude SDK reaches it via Bash + curl using the auto-refreshed PB_TOKEN env.
 # Token is fetched at startup and refreshed every 30 min.
 # ============================================================================
-import urllib.request, urllib.error  # noqa: E401
+import urllib.request, urllib.error, urllib.parse  # noqa: E401
+import datetime as _dt
+import hashlib as _hashlib
 
 POCKETBASE_URL = os.environ.get("POCKETBASE_URL", "").rstrip("/")
 POCKETBASE_ADMIN_EMAIL = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
@@ -1013,6 +1015,99 @@ async def api_health(request: Request):
         "model": state.model or "",
     })
     return base
+
+
+# ---------- REST: today's todos (drives the header bell) ----------
+
+def _today_ack_path() -> Path:
+    return state.cwd_root / ".bridge_data" / "today_ack.json"
+
+
+def _pb_get_json(path: str) -> dict:
+    """GET a PocketBase admin endpoint with auto-retry on 401."""
+    if not POCKETBASE_URL:
+        return {"items": []}
+    token = os.environ.get("PB_TOKEN", "")
+    url = POCKETBASE_URL + path
+    for attempt in (0, 1):
+        req = urllib.request.Request(url,
+            headers={"Authorization": token} if token else {})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and attempt == 0 and _pb_refresh_token():
+                token = os.environ.get("PB_TOKEN", "")
+                continue
+            log.warning("PB GET %s failed: %s", path, e)
+            return {"items": []}
+        except (urllib.error.URLError, OSError) as e:
+            log.warning("PB GET %s network error: %s", path, e)
+            return {"items": []}
+    return {"items": []}
+
+
+def _today_todos_query() -> list[dict]:
+    today = _dt.date.today().isoformat()
+    f = (f"status='Pending' && "
+         f"(due_date='' || due_date<='{today} 23:59:59')")
+    q = urllib.parse.quote(f, safe="")
+    data = _pb_get_json(
+        f"/api/collections/todos/records?filter={q}"
+        f"&sort=due_date,-priority&perPage=200")
+    out = []
+    for r in data.get("items", []):
+        out.append({
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "due_date": r.get("due_date", "") or "",
+            "priority": r.get("priority", "") or "Normal",
+        })
+    return out
+
+
+def _today_signature(items: list[dict]) -> str:
+    today = _dt.date.today().isoformat()
+    ids = ",".join(sorted(x["id"] for x in items))
+    return _hashlib.sha1(f"{today}|{ids}".encode()).hexdigest()[:16]
+
+
+def _load_today_ack() -> dict:
+    try:
+        return json.loads(_today_ack_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_today_ack(d: dict) -> None:
+    p = _today_ack_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(d), encoding="utf-8")
+
+
+@app.get("/api/today-todos")
+async def api_today_todos():
+    """Return today's pending todos for the header bell. Auth is enforced by
+    the global middleware (path is not in `_PUBLIC_EXACT`)."""
+    items = await asyncio.to_thread(_today_todos_query)
+    sig = _today_signature(items)
+    ack = await asyncio.to_thread(_load_today_ack)
+    return {
+        "count": len(items),
+        "items": items,
+        "signature": sig,
+        "acked": ack.get("signature") == sig and len(items) > 0,
+    }
+
+
+@app.post("/api/today-todos/ack")
+async def api_today_todos_ack(body: dict):
+    sig = (body or {}).get("signature", "")
+    if not sig:
+        raise HTTPException(400, "missing signature")
+    await asyncio.to_thread(_save_today_ack,
+        {"signature": sig, "at": _dt.datetime.now().isoformat()})
+    return {"ok": True}
 
 
 @app.get("/.well-known/oauth-protected-resource/mcp")
