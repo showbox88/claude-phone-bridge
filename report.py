@@ -78,6 +78,17 @@ def previous_week_window(now_local: dt.datetime) -> tuple[dt.datetime, dt.dateti
     return start, end, label
 
 
+def current_week_window(now_local: dt.datetime) -> tuple[dt.datetime, dt.datetime, str]:
+    """Mon-this-week 00:00 → now. For 'show what I've done this week so far'."""
+    start = (now_local - dt.timedelta(days=now_local.isoweekday() - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    iso = start.isocalendar()
+    label = (f"{iso.year}-W{iso.week:02d} "
+             f"({start.month}/{start.day}–{now_local.month}/{now_local.day} 至今)")
+    return start, now_local, label
+
+
 def next_fire(cfg: dict[str, Any], now_local: dt.datetime) -> dt.datetime:
     """Next configured weekday/hour/minute strictly after now_local."""
     target_weekday = int(cfg["weekday"])
@@ -161,7 +172,7 @@ def render_markdown(summary: dict[str, Any], label: str) -> str:
 def _post_to_new_session(label: str, markdown: str, cwd: str) -> str:
     title = f"📊 周报 {label}"
     sid = db.create_session(cwd=cwd, title=title[:80], mode="chat", model="")
-    db.append_message(sid, "assistant", {"type": "assistant_text", "text": markdown})
+    db.append_message(sid, "assistant_text", {"text": markdown})
     return sid
 
 
@@ -216,12 +227,17 @@ async def scheduler_loop(default_cwd: str, on_post=None) -> None:
             await asyncio.sleep(300)
 
 
-async def run_now(default_cwd: str) -> tuple[str, str]:
-    """Manually generate a report for last week. Also marks slot as done."""
+async def run_now(default_cwd: str, window: str = "current") -> tuple[str, str]:
+    """Manually generate a report. window='current' (Mon→now) for an instant
+    peek at this week so far; window='previous' for the same window the
+    scheduled job would post on Monday."""
     cfg = load()
     tz = _tz(cfg["timezone"])
     now_local = dt.datetime.now(tz)
-    start, end, label = previous_week_window(now_local)
+    if window == "previous":
+        start, end, label = previous_week_window(now_local)
+        save({"last_period_start_iso": start.date().isoformat()})
+    else:
+        start, end, label = current_week_window(now_local)
     sid, _md = await asyncio.to_thread(generate_for_window, start, end, label, default_cwd)
-    save({"last_period_start_iso": start.date().isoformat()})
     return sid, label

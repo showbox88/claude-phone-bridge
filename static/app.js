@@ -1727,7 +1727,8 @@
               <span id="wr-last">—</span>
             </div>
             <div class="wr-actions">
-              <button id="wr-run" type="button">立即生成一份</button>
+              <button id="wr-run-prev" type="button">生成上周完整</button>
+              <button id="wr-run" type="button">生成本周至今</button>
               <button id="wr-save" type="button" class="primary">保存</button>
             </div>
             <div class="wr-status" id="wr-status"></div>
@@ -1752,7 +1753,8 @@
         wd.appendChild(b);
       });
       m.querySelector('#wr-save').addEventListener('click', saveWeeklyReport);
-      m.querySelector('#wr-run').addEventListener('click', runWeeklyReportNow);
+      m.querySelector('#wr-run').addEventListener('click', () => runWeeklyReportNow('current'));
+      m.querySelector('#wr-run-prev').addEventListener('click', () => runWeeklyReportNow('previous'));
     }
     m.classList.remove('hidden');
     await loadWeeklyReportConfig();
@@ -1806,11 +1808,17 @@
     }
   }
 
-  async function runWeeklyReportNow() {
-    if (!confirm('立即生成一份上周的周报？会新开一个会话。')) return;
+  async function runWeeklyReportNow(window) {
+    const w = window === 'previous' ? 'previous' : 'current';
+    const desc = w === 'previous' ? '上周完整' : '本周至今';
+    if (!confirm(`立即生成 ${desc} 的周报？会新开一个会话。`)) return;
     setWRStatus('生成中…');
     try {
-      const r = await fetch(apiUrl('/api/settings/weekly-report/run-now'), { method: 'POST' });
+      const r = await fetch(apiUrl('/api/settings/weekly-report/run-now'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ window: w }),
+      });
       if (!r.ok) throw new Error(await r.text());
       const data = await r.json();
       setWRStatus(`已生成: ${data.label}`);

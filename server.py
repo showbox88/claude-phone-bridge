@@ -1361,8 +1361,11 @@ async def api_settings_weekly_report_put(body: dict):
 
 
 @app.post("/api/settings/weekly-report/run-now")
-async def api_settings_weekly_report_run_now():
-    sid, label = await report.run_now(str(state.cwd_root))
+async def api_settings_weekly_report_run_now(body: dict | None = None):
+    window = (body or {}).get("window") or "current"
+    if window not in ("current", "previous"):
+        window = "current"
+    sid, label = await report.run_now(str(state.cwd_root), window=window)
     await _weekly_report_posted(sid, label)
     return {"session_id": sid, "label": label}
 
