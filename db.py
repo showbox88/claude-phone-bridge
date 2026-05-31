@@ -295,6 +295,98 @@ def usage_summary() -> dict[str, Any]:
     }
 
 
+def range_summary(start_ts: float, end_ts: float) -> dict[str, Any]:
+    """Aggregate turns + sessions inside [start_ts, end_ts) for a report card."""
+    with _conn() as c:
+        totals = c.execute("""
+            SELECT COUNT(*) AS turns,
+                   COALESCE(SUM(input_tokens),0) AS in_tok,
+                   COALESCE(SUM(output_tokens),0) AS out_tok,
+                   COALESCE(SUM(cache_read_tokens),0) AS cache_read,
+                   COALESCE(SUM(cache_create_tokens),0) AS cache_create,
+                   COALESCE(SUM(cost_usd),0) AS cost,
+                   COALESCE(SUM(duration_ms),0) AS duration_ms
+            FROM turns
+            WHERE created_at >= ? AND created_at < ?
+        """, (start_ts, end_ts)).fetchone()
+        by_model = c.execute("""
+            SELECT model, COUNT(*) AS turns,
+                   COALESCE(SUM(input_tokens),0) AS in_tok,
+                   COALESCE(SUM(output_tokens),0) AS out_tok,
+                   COALESCE(SUM(cost_usd),0) AS cost
+            FROM turns
+            WHERE created_at >= ? AND created_at < ?
+            GROUP BY model
+            ORDER BY cost DESC
+        """, (start_ts, end_ts)).fetchall()
+        new_sessions = c.execute(
+            "SELECT COUNT(*) AS n FROM sessions WHERE created_at >= ? AND created_at < ?",
+            (start_ts, end_ts),
+        ).fetchone()
+        top_cwds = c.execute("""
+            SELECT s.cwd, COUNT(t.id) AS turns,
+                   COALESCE(SUM(t.cost_usd),0) AS cost
+            FROM turns t JOIN sessions s ON s.id = t.session_id
+            WHERE t.created_at >= ? AND t.created_at < ?
+            GROUP BY s.cwd
+            ORDER BY turns DESC
+            LIMIT 5
+        """, (start_ts, end_ts)).fetchall()
+        top_sessions = c.execute("""
+            SELECT s.id, s.title, s.mode, COUNT(t.id) AS turns,
+                   COALESCE(SUM(t.cost_usd),0) AS cost
+            FROM turns t JOIN sessions s ON s.id = t.session_id
+            WHERE t.created_at >= ? AND t.created_at < ?
+            GROUP BY s.id
+            ORDER BY turns DESC
+            LIMIT 5
+        """, (start_ts, end_ts)).fetchall()
+    return {
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+        "totals": dict(totals),
+        "by_model": [dict(r) for r in by_model],
+        "new_sessions": new_sessions["n"],
+        "top_cwds": [dict(r) for r in top_cwds],
+        "top_sessions": [dict(r) for r in top_sessions],
+    }
+
+
+# ---------- settings (key/value JSON store) ----------
+
+def _ensure_settings_table() -> None:
+    with _conn() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+
+def get_setting(key: str, default: Any = None) -> Any:
+    _ensure_settings_table()
+    with _conn() as c:
+        row = c.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value"])
+    except (ValueError, TypeError):
+        return default
+
+
+def set_setting(key: str, value: Any) -> None:
+    _ensure_settings_table()
+    payload = json.dumps(value, ensure_ascii=False)
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, payload),
+        )
+
+
 def delete_session(sid: str) -> None:
     with _conn() as c:
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))

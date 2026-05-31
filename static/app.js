@@ -48,6 +48,7 @@
   let currentSessionTitle = '';
   let currentMode = 'code';
   let currentModel = '';
+  let autoApprove = false;
   let META = { modes: [], models: [] };
   let isResponding = false;  // true while Claude is generating a turn
 
@@ -732,10 +733,25 @@
 
   function setModel(model) {
     currentModel = model || '';
+    refreshModelPill();
+  }
+
+  function refreshModelPill() {
     const labelEl = document.getElementById('model-label');
     if (!labelEl) return;
     const m = (META.models || []).find((x) => x.id === currentModel);
-    labelEl.textContent = (m && m.label) || '默认';
+    const base = (m && m.label) || '默认';
+    labelEl.textContent = autoApprove ? `🚀 ${base}` : base;
+    const btn = document.getElementById('model-btn');
+    if (btn) btn.classList.toggle('yolo', autoApprove);
+  }
+
+  function setAutoApprove(value) {
+    autoApprove = !!value;
+    refreshModelPill();
+    // Re-render menu if it's open so the toggle row reflects current state.
+    const menu = document.getElementById('model-menu');
+    if (menu && !menu.classList.contains('hidden')) renderModelMenu();
   }
 
   // ---------- session list ----------
@@ -924,6 +940,7 @@
     switch (msg.type) {
       case 'hello': {
         currentSessionId = msg.session_id || null;
+        setAutoApprove(!!msg.auto_approve);
         if (msg.session) {
           setHeader(msg.session.title, msg.session.cwd);
           setMode(msg.session.mode);
@@ -963,6 +980,9 @@
       case 'session_deleted':
         loadSessionList();
         break;
+      case 'sessions_changed':
+        loadSessionList();
+        break;
       case 'session_renamed':
         if (msg.id === currentSessionId) setHeader(msg.title, cwdLabel.textContent);
         loadSessionList();
@@ -972,6 +992,11 @@
         break;
       case 'session_model_changed':
         if (msg.id === currentSessionId) setModel(msg.model);
+        break;
+      case 'auto_approve_changed':
+        // Sync the YOLO toggle across every connected client (other tabs,
+        // desktop browser, phone).
+        setAutoApprove(!!msg.value);
         break;
       case 'system':
         appendSystem(msg.msg || '');
@@ -1473,6 +1498,9 @@
       else if (cmd === 'usage') {
         openUsageModal();
       }
+      else if (cmd === 'weekly-report') {
+        openWeeklyReportModal();
+      }
     });
   });
 
@@ -1496,6 +1524,28 @@
 
   function renderModelMenu() {
     modelMenu.innerHTML = '';
+
+    // YOLO toggle — sits above the model list. Clicking does not close the
+    // menu so the user can confirm the visual state change before dismissing.
+    const yolo = document.createElement('button');
+    yolo.type = 'button';
+    yolo.className = 'model-item yolo-toggle' + (autoApprove ? ' on' : '');
+    yolo.innerHTML = `
+      <span class="label">🚀 自动批准请求</span>
+      <span class="desc">${autoApprove ? '已开启 · 点击关闭' : '关闭 · 点击开启'}</span>
+      <span class="yolo-dot${autoApprove ? ' on' : ''}"></span>`;
+    yolo.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const next = !autoApprove;
+      setAutoApprove(next);
+      send({ type: 'cmd', name: 'set_auto_approve', value: next });
+    });
+    modelMenu.appendChild(yolo);
+
+    const sep = document.createElement('div');
+    sep.className = 'model-sep';
+    modelMenu.appendChild(sep);
+
     for (const m of META.models || []) {
       const item = document.createElement('button');
       item.type = 'button';
@@ -1635,6 +1685,139 @@
   function pct(v, max) {
     if (!max || max <= 0) return 0;
     return Math.max(0, Math.min(100, (v / max) * 100));
+  }
+
+  // ---------- weekly report settings modal ----------
+  const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']; // 1..7
+  async function openWeeklyReportModal() {
+    let m = document.getElementById('wr-modal');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'wr-modal';
+      m.className = 'modal-bg wr-modal hidden';
+      m.innerHTML = `
+        <div class="modal">
+          <div class="modal-head">
+            <span>📊 周报设置</span>
+            <button class="icon-btn modal-close" type="button">✕</button>
+          </div>
+          <div class="wr-body">
+            <label class="wr-row wr-toggle">
+              <span class="wr-label">启用周报</span>
+              <input type="checkbox" id="wr-enabled">
+            </label>
+            <div class="wr-row">
+              <span class="wr-label">每周几发送</span>
+              <div class="wr-weekday" id="wr-weekday"></div>
+            </div>
+            <div class="wr-row">
+              <span class="wr-label">时间</span>
+              <div class="wr-time">
+                <input type="number" id="wr-hour" min="0" max="23" step="1">
+                <span>:</span>
+                <input type="number" id="wr-minute" min="0" max="59" step="1">
+              </div>
+            </div>
+            <div class="wr-row wr-info">
+              <span class="wr-label">时区</span>
+              <span class="wr-tz" id="wr-tz">—</span>
+            </div>
+            <div class="wr-row wr-info">
+              <span class="wr-label">上次生成</span>
+              <span id="wr-last">—</span>
+            </div>
+            <div class="wr-actions">
+              <button id="wr-run" type="button">立即生成一份</button>
+              <button id="wr-save" type="button" class="primary">保存</button>
+            </div>
+            <div class="wr-status" id="wr-status"></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(m);
+      m.addEventListener('click', () => m.classList.add('hidden'));
+      m.querySelector('.modal').addEventListener('click', (e) => e.stopPropagation());
+      m.querySelector('.modal-close').addEventListener('click', () => m.classList.add('hidden'));
+      // render weekday picker once
+      const wd = m.querySelector('#wr-weekday');
+      WEEKDAY_LABELS.forEach((lbl, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.day = String(i + 1);
+        b.textContent = lbl;
+        b.addEventListener('click', () => {
+          wd.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+          b.classList.add('active');
+        });
+        wd.appendChild(b);
+      });
+      m.querySelector('#wr-save').addEventListener('click', saveWeeklyReport);
+      m.querySelector('#wr-run').addEventListener('click', runWeeklyReportNow);
+    }
+    m.classList.remove('hidden');
+    await loadWeeklyReportConfig();
+  }
+
+  function setWRStatus(text, isError) {
+    const el = document.getElementById('wr-status');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isError ? 'var(--error, #e55)' : 'var(--text-3)';
+  }
+
+  async function loadWeeklyReportConfig() {
+    setWRStatus('加载中…');
+    try {
+      const r = await fetch(apiUrl('/api/settings/weekly-report'));
+      const cfg = await r.json();
+      document.getElementById('wr-enabled').checked = !!cfg.enabled;
+      document.getElementById('wr-hour').value = cfg.hour ?? 9;
+      document.getElementById('wr-minute').value = cfg.minute ?? 0;
+      document.getElementById('wr-tz').textContent = cfg.timezone || '—';
+      document.getElementById('wr-last').textContent =
+        cfg.last_period_start_iso ? `${cfg.last_period_start_iso} 起的那一周` : '尚未生成';
+      const wd = document.getElementById('wr-weekday');
+      wd.querySelectorAll('button').forEach((b) => {
+        b.classList.toggle('active', Number(b.dataset.day) === Number(cfg.weekday || 1));
+      });
+      setWRStatus('');
+    } catch (e) {
+      setWRStatus('加载失败: ' + e.message, true);
+    }
+  }
+
+  async function saveWeeklyReport() {
+    const enabled = document.getElementById('wr-enabled').checked;
+    const hour = Number(document.getElementById('wr-hour').value);
+    const minute = Number(document.getElementById('wr-minute').value);
+    const activeWd = document.querySelector('#wr-weekday button.active');
+    const weekday = activeWd ? Number(activeWd.dataset.day) : 1;
+    setWRStatus('保存中…');
+    try {
+      const r = await fetch(apiUrl('/api/settings/weekly-report'), {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled, hour, minute, weekday }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      setWRStatus('已保存 ✓');
+    } catch (e) {
+      setWRStatus('保存失败: ' + e.message, true);
+    }
+  }
+
+  async function runWeeklyReportNow() {
+    if (!confirm('立即生成一份上周的周报？会新开一个会话。')) return;
+    setWRStatus('生成中…');
+    try {
+      const r = await fetch(apiUrl('/api/settings/weekly-report/run-now'), { method: 'POST' });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      setWRStatus(`已生成: ${data.label}`);
+      loadSessionList();
+    } catch (e) {
+      setWRStatus('生成失败: ' + e.message, true);
+    }
   }
 
   // ---------- meta load (modes/models) ----------
@@ -2027,15 +2210,105 @@
       sysMsg('推送启用失败: ' + e.message);
     }
   }
-  notifBtn.addEventListener('click', setupPush);
+  // (setupPush kept for future use — bell click now drives today's-todos panel.)
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => { /* ignore */ });
   }
 
+  // ---------- today's todos bell ----------
+  let bellState = { count: 0, items: [], signature: '', acked: true };
+
+  function applyBellUI() {
+    const needAlert = bellState.count > 0 && !bellState.acked;
+    notifBtn.classList.toggle('alert', needAlert);
+    if (bellState.count === 0) {
+      notifBtn.title = '今天没有待办';
+    } else if (bellState.acked) {
+      notifBtn.title = `今天有 ${bellState.count} 件待办（已查看）`;
+    } else {
+      notifBtn.title = `今天有 ${bellState.count} 件待办`;
+    }
+  }
+
+  async function checkBell() {
+    try {
+      const r = await fetch(apiUrl('/api/today-todos'));
+      if (!r.ok) return;
+      const data = await r.json();
+      // Server is up but PocketBase isn't. Keep the bell's last-known state
+      // instead of flashing back to "no todos today" — an outage shouldn't
+      // look the same as an empty list.
+      if (data.ok === false) {
+        if (notifBtn.title.indexOf('待办') < 0) {
+          notifBtn.title = '待办数据暂不可用';
+        }
+        return;
+      }
+      bellState = data;
+      applyBellUI();
+    } catch (e) { /* offline ok */ }
+  }
+
+  function fmtDue(s) {
+    if (!s) return '无截止';
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return s;
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${day}`;
+  }
+
+  async function openBellPanel() {
+    await checkBell();
+    const overlay = document.createElement('div');
+    overlay.className = 'bell-modal';
+    const rows = bellState.items.map((t) => {
+      const prio = (t.priority || 'Normal').toLowerCase();
+      return `
+        <div class="bell-row prio-${prio}">
+          <div class="bell-pri"></div>
+          <div class="bell-body">
+            <div class="bell-text">${escapeHtml(t.title || '(无标题)')}</div>
+            <div class="bell-meta">${escapeHtml(fmtDue(t.due_date))} · ${escapeHtml(t.priority || 'Normal')}</div>
+          </div>
+        </div>`;
+    }).join('');
+    overlay.innerHTML = `
+      <div class="bell-card" role="dialog" aria-modal="true" aria-label="今天的待办">
+        <div class="bell-head">
+          <div class="bell-title">今天的待办 (${bellState.count})</div>
+          <button class="icon-btn close-bell" type="button" data-icon="close" data-icon-size="18" aria-label="关闭"></button>
+        </div>
+        <div class="bell-list">${rows || '<div class="bell-empty">今天没什么要做的 ✨</div>'}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    if (window.hydrateIcons) window.hydrateIcons(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.close-bell').addEventListener('click', close);
+
+    if (bellState.signature && bellState.count > 0 && !bellState.acked) {
+      try {
+        await fetch(apiUrl('/api/today-todos/ack'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signature: bellState.signature }),
+        });
+      } catch (_) { /* ignore */ }
+      bellState.acked = true;
+      applyBellUI();
+    }
+  }
+
+  notifBtn.addEventListener('click', openBellPanel);
+  checkBell();
+  setInterval(checkBell, 60_000);
+
   // ---------- visibility re-focus ----------
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && currentSource && (!ws || ws.readyState !== 1)) connect();
+    if (!document.hidden) checkBell();
   });
 
   // ---------- source picker ----------

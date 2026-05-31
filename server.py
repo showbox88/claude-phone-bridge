@@ -47,6 +47,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 import db
 import push
+import report
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -57,7 +58,9 @@ log = logging.getLogger("bridge")
 # Claude SDK reaches it via Bash + curl using the auto-refreshed PB_TOKEN env.
 # Token is fetched at startup and refreshed every 30 min.
 # ============================================================================
-import urllib.request, urllib.error  # noqa: E401
+import urllib.request, urllib.error, urllib.parse  # noqa: E401
+import datetime as _dt
+import hashlib as _hashlib
 
 POCKETBASE_URL = os.environ.get("POCKETBASE_URL", "").rstrip("/")
 POCKETBASE_ADMIN_EMAIL = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
@@ -169,6 +172,11 @@ class AppState:
     sdk_session_id: str | None = None    # SDK's session_id, captured per turn
     mode: str = "code"                   # 'code' | 'chat'
     model: str = ""                      # model alias or "" for default
+    # YOLO toggle: when on, can_use_tool auto-approves every tool call instead
+    # of broadcasting permission_request. Deliberately NOT persisted — resets
+    # to False on every service restart so it can't quietly stay on across
+    # deploys.
+    auto_approve: bool = False
 
     def __post_init__(self):
         self.cwd = self.cwd_root
@@ -237,6 +245,23 @@ def _save_msg(role: str, content: dict) -> None:
         db.append_message(state.session_id, role, content)
 
 
+async def _weekly_report_posted(sid: str, label: str) -> None:
+    """Hook called by report.scheduler_loop after a new weekly report session
+    is created — tells connected clients to refresh + fires a push so the user
+    sees it on their phone."""
+    await broadcast({"type": "sessions_changed", "reason": "weekly_report",
+                     "session_id": sid})
+    try:
+        await asyncio.to_thread(
+            push.send_to_all,
+            "📊 周报已生成",
+            f"{label} · 打开 Phone Bridge 查看",
+            None,
+        )
+    except Exception:
+        log.exception("weekly report push failed")
+
+
 # ---------- permission callback ----------
 
 async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG001
@@ -248,6 +273,16 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
                 ("curl " in cmd or "curl\n" in cmd):
             return PermissionResultAllow(behavior="allow", updated_input=None)
     if tool_name in AUTO_ALLOW:
+        return PermissionResultAllow(behavior="allow", updated_input=None)
+
+    # YOLO toggle: skip the phone prompt entirely. Still surface the
+    # tool call in the chat as a system message so the user has audit
+    # trail of what got auto-run while they were away.
+    if state.auto_approve:
+        await broadcast({
+            "type": "system",
+            "msg": f"🚀 auto-approved {tool_name}",
+        })
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
     cb_id = secrets.token_urlsafe(8)
@@ -609,6 +644,9 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     pb_task = asyncio.create_task(_pb_refresh_loop()) if pb_ready else None
     if not pb_ready and POCKETBASE_URL:
         log.warning("PocketBase configured but initial auth failed — 打卡 will not work")
+    report_task = asyncio.create_task(
+        report.scheduler_loop(str(state.cwd_root), on_post=_weekly_report_posted)
+    )
     try:
         latest = db.latest_session_id()
         if latest:
@@ -622,6 +660,9 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         pb_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pb_task
+    report_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await report_task
     if state.client is not None:
         with contextlib.suppress(Exception):
             await state.client.disconnect()
@@ -1015,6 +1056,118 @@ async def api_health(request: Request):
     return base
 
 
+# ---------- REST: today's todos (drives the header bell) ----------
+
+def _today_ack_path() -> Path:
+    """Co-located with the server script so the path is stable regardless of
+    DEFAULT_CWD or the user navigating to a different cwd at runtime."""
+    return Path(__file__).parent / ".bridge_data" / "today_ack.json"
+
+
+class _PBError(Exception):
+    """PocketBase query failed (network, auth, or HTTP error). Raised by
+    `_pb_get_json` so callers can distinguish 'no data today' from 'we
+    couldn't reach PB at all' instead of silently returning an empty list."""
+
+
+def _pb_get_json(path: str) -> dict:
+    """GET a PocketBase admin endpoint with auto-retry on 401. Raises
+    _PBError on persistent failure."""
+    if not POCKETBASE_URL:
+        raise _PBError("PocketBase not configured")
+    token = os.environ.get("PB_TOKEN", "")
+    url = POCKETBASE_URL + path
+    last_err: Exception | None = None
+    for attempt in (0, 1):
+        req = urllib.request.Request(url,
+            headers={"Authorization": token} if token else {})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code == 401 and attempt == 0 and _pb_refresh_token():
+                token = os.environ.get("PB_TOKEN", "")
+                continue
+            break
+        except (urllib.error.URLError, OSError) as e:
+            last_err = e
+            break
+    log.warning("PB GET %s failed: %s", path, last_err)
+    raise _PBError(str(last_err))
+
+
+def _today_todos_query() -> list[dict]:
+    today = _dt.date.today().isoformat()
+    f = (f"status='Pending' && "
+         f"(due_date='' || due_date<='{today} 23:59:59')")
+    q = urllib.parse.quote(f, safe="")
+    data = _pb_get_json(
+        f"/api/collections/todos/records?filter={q}"
+        f"&sort=due_date,-priority&perPage=200")
+    out = []
+    for r in data.get("items", []):
+        out.append({
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "due_date": r.get("due_date", "") or "",
+            "priority": r.get("priority", "") or "Normal",
+        })
+    return out
+
+
+def _today_signature(items: list[dict]) -> str:
+    today = _dt.date.today().isoformat()
+    ids = ",".join(sorted(x["id"] for x in items))
+    return _hashlib.sha1(f"{today}|{ids}".encode()).hexdigest()[:16]
+
+
+def _load_today_ack() -> dict:
+    try:
+        return json.loads(_today_ack_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_today_ack(d: dict) -> None:
+    p = _today_ack_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(d), encoding="utf-8")
+
+
+@app.get("/api/today-todos")
+async def api_today_todos():
+    """Return today's pending todos for the header bell. Auth is enforced by
+    the global middleware (path is not in `_PUBLIC_EXACT`).
+
+    On PB unreachable: returns {"ok": false, "error": "pb_unreachable"} so the
+    client can keep its last-known bell state instead of treating the outage
+    as 'no todos today'."""
+    try:
+        items = await asyncio.to_thread(_today_todos_query)
+    except _PBError as e:
+        return {"ok": False, "error": "pb_unreachable", "detail": str(e)}
+    sig = _today_signature(items)
+    ack = await asyncio.to_thread(_load_today_ack)
+    return {
+        "ok": True,
+        "count": len(items),
+        "items": items,
+        "signature": sig,
+        "acked": ack.get("signature") == sig and len(items) > 0,
+    }
+
+
+@app.post("/api/today-todos/ack")
+async def api_today_todos_ack(body: dict):
+    sig = (body or {}).get("signature", "")
+    if not sig:
+        raise HTTPException(400, "missing signature")
+    await asyncio.to_thread(_save_today_ack,
+        {"signature": sig, "at": _dt.datetime.now().isoformat()})
+    return {"ok": True}
+
+
 @app.get("/.well-known/oauth-protected-resource/mcp")
 async def mcp_oauth_resource_metadata():
     """RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling
@@ -1169,6 +1322,49 @@ async def api_sessions_patch(sid: str, body: dict):
 @app.get("/api/usage")
 async def api_usage():
     return db.usage_summary()
+
+
+@app.get("/api/settings/weekly-report")
+async def api_settings_weekly_report_get():
+    return report.load()
+
+
+@app.put("/api/settings/weekly-report")
+async def api_settings_weekly_report_put(body: dict):
+    patch: dict[str, Any] = {}
+    if "enabled" in body:
+        patch["enabled"] = bool(body["enabled"])
+    if "weekday" in body:
+        try:
+            wd = int(body["weekday"])
+            if 1 <= wd <= 7:
+                patch["weekday"] = wd
+        except (TypeError, ValueError):
+            raise HTTPException(400, "weekday must be 1..7")
+    if "hour" in body:
+        try:
+            h = int(body["hour"])
+            if 0 <= h <= 23:
+                patch["hour"] = h
+        except (TypeError, ValueError):
+            raise HTTPException(400, "hour must be 0..23")
+    if "minute" in body:
+        try:
+            m = int(body["minute"])
+            if 0 <= m <= 59:
+                patch["minute"] = m
+        except (TypeError, ValueError):
+            raise HTTPException(400, "minute must be 0..59")
+    if "timezone" in body:
+        patch["timezone"] = str(body["timezone"])[:64]
+    return report.save(patch)
+
+
+@app.post("/api/settings/weekly-report/run-now")
+async def api_settings_weekly_report_run_now():
+    sid, label = await report.run_now(str(state.cwd_root))
+    await _weekly_report_posted(sid, label)
+    return {"session_id": sid, "label": label}
 
 
 @app.get("/api/meta")
@@ -1542,6 +1738,7 @@ async def ws_handler(ws: WebSocket):
             "type": "hello",
             "cwd": _to_rel(state.cwd),
             "session_id": state.session_id,
+            "auto_approve": state.auto_approve,
         }
         if state.session_id:
             sess = db.get_session(state.session_id)
@@ -1656,6 +1853,21 @@ async def handle_cmd(msg: dict) -> None:
             await open_session(target_sid)
         else:
             await new_session(mode=new_mode)
+    elif name == "set_auto_approve":
+        new_val = bool(msg.get("value"))
+        if new_val == state.auto_approve:
+            return
+        state.auto_approve = new_val
+        await broadcast({
+            "type": "auto_approve_changed",
+            "value": state.auto_approve,
+        })
+        await broadcast({
+            "type": "system",
+            "msg": ("🚀 自动批准已开启 — 后续工具调用不再询问"
+                    if state.auto_approve
+                    else "🛑 自动批准已关闭 — 恢复逐次询问"),
+        })
     elif name == "set_model":
         new_model = msg.get("model") or ""
         valid_ids = {m["id"] for m in AVAILABLE_MODELS}

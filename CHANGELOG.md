@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-05 — 周报 (Weekly Report)
+
+- **功能**：每周（默认周一 09:00 Asia/Shanghai）自动新建一个 Chat 会话，标题
+  `📊 周报 2026-Wxx`，里面是 markdown 周报（总轮次/花销/Token/按模型/Top cwd/Top 会话）。
+- **数据来源**：现有 `turns` 表 + `sessions` 表，新增 `db.range_summary(start_ts, end_ts)`。
+  不调 Claude API、不消耗额度。
+- **配置 UI**：⋯ 菜单 → `周报设置`。可改开关/星期/时间，"立即生成一份"按钮回填上周。
+- **持久化**：开关/时间/上次生成的周存 SQLite `settings` 表（新增）。
+- **架构**：`report.py`（独立模块），`scheduler_loop` 在 `lifespan` 起 background task，
+  每小时唤醒检查一次配置和触发条件，配置改了无需重启。生成后 Web Push 通知。
+
 ## 2026-05 — 期间大改
 
 代码改动量极大，但 commit 节奏稀疏。下面按主题整理「实际上线了什么、为什么、怎么用」。
