@@ -313,3 +313,38 @@ def latest_session_id(mode: str | None = None) -> str | None:
                 (mode,),
             ).fetchone()
     return row["id"] if row else None
+
+
+# ---------- settings (key/value JSON store) ----------
+
+def _ensure_settings_table() -> None:
+    with _conn() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+
+
+def get_setting(key: str, default: Any = None) -> Any:
+    _ensure_settings_table()
+    with _conn() as c:
+        row = c.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return default
+    try:
+        return json.loads(row["value"])
+    except (ValueError, TypeError):
+        return default
+
+
+def set_setting(key: str, value: Any) -> None:
+    _ensure_settings_table()
+    payload = json.dumps(value, ensure_ascii=False)
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, payload),
+        )

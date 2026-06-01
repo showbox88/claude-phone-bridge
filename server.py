@@ -47,6 +47,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 import db
 import push
+import report
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -242,6 +243,23 @@ async def broadcast(msg: dict) -> None:
 def _save_msg(role: str, content: dict) -> None:
     if state.session_id:
         db.append_message(state.session_id, role, content)
+
+
+async def _weekly_report_posted(sid: str, label: str) -> None:
+    """Hook called by report.scheduler_loop after a new weekly report session
+    is created — tells connected clients to refresh + fires a push so the user
+    sees it on their phone."""
+    await broadcast({"type": "sessions_changed", "reason": "weekly_report",
+                     "session_id": sid})
+    try:
+        await asyncio.to_thread(
+            push.send_to_all,
+            "📊 周报已生成",
+            f"{label} · 打开 Phone Bridge 查看",
+            None,
+        )
+    except Exception:
+        log.exception("weekly report push failed")
 
 
 # ---------- permission callback ----------
@@ -626,6 +644,9 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     pb_task = asyncio.create_task(_pb_refresh_loop()) if pb_ready else None
     if not pb_ready and POCKETBASE_URL:
         log.warning("PocketBase configured but initial auth failed — 打卡 will not work")
+    report_task = asyncio.create_task(
+        report.scheduler_loop(str(state.cwd_root), on_post=_weekly_report_posted)
+    )
     try:
         latest = db.latest_session_id()
         if latest:
@@ -639,6 +660,9 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         pb_task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await pb_task
+    report_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await report_task
     if state.client is not None:
         with contextlib.suppress(Exception):
             await state.client.disconnect()
@@ -1298,6 +1322,52 @@ async def api_sessions_patch(sid: str, body: dict):
 @app.get("/api/usage")
 async def api_usage():
     return db.usage_summary()
+
+
+@app.get("/api/settings/weekly-report")
+async def api_settings_weekly_report_get():
+    return report.load()
+
+
+@app.put("/api/settings/weekly-report")
+async def api_settings_weekly_report_put(body: dict):
+    patch: dict[str, Any] = {}
+    if "enabled" in body:
+        patch["enabled"] = bool(body["enabled"])
+    if "weekday" in body:
+        try:
+            wd = int(body["weekday"])
+            if 1 <= wd <= 7:
+                patch["weekday"] = wd
+        except (TypeError, ValueError):
+            raise HTTPException(400, "weekday must be 1..7")
+    if "hour" in body:
+        try:
+            h = int(body["hour"])
+            if 0 <= h <= 23:
+                patch["hour"] = h
+        except (TypeError, ValueError):
+            raise HTTPException(400, "hour must be 0..23")
+    if "minute" in body:
+        try:
+            m = int(body["minute"])
+            if 0 <= m <= 59:
+                patch["minute"] = m
+        except (TypeError, ValueError):
+            raise HTTPException(400, "minute must be 0..59")
+    if "timezone" in body:
+        patch["timezone"] = str(body["timezone"])[:64]
+    return report.save(patch)
+
+
+@app.post("/api/settings/weekly-report/run-now")
+async def api_settings_weekly_report_run_now(body: dict | None = None):
+    window = (body or {}).get("window") or "current"
+    if window not in ("current", "previous"):
+        window = "current"
+    sid, label = await report.run_now(str(state.cwd_root), window=window)
+    await _weekly_report_posted(sid, label)
+    return {"session_id": sid, "label": label}
 
 
 @app.get("/api/meta")

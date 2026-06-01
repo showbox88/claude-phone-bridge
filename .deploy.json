@@ -13,10 +13,13 @@
     ".env.bak",
     ".bridge_uploads",
     ".bridge_data",
+    ".gmail",
+    "gmail_token.json",
+    "client_secret*.json",
     "tests",
     "node_modules"
   ],
-  "keep_files": [".env", ".bridge_uploads", ".bridge_data"],
+  "keep_files": [".env", ".bridge_uploads", ".bridge_data", ".gmail"],
   "pre_restart": [
     "[ -d .venv ] || python3 -m venv .venv",
     ".venv/bin/pip install -r requirements.txt --quiet"

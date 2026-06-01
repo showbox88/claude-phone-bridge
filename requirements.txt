@@ -9,3 +9,7 @@ bcrypt>=4.1
 pyotp>=2.9
 segno>=1.6
 aiohttp>=3.9
+# Weekly-report email digest (Gmail readonly + auto token refresh)
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.130
