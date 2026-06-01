@@ -48,6 +48,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 import db
 import push
 import report
+import pb_tools
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -102,6 +103,15 @@ async def _pb_refresh_loop() -> None:
             break
         except Exception as e:
             log.exception("PB refresh loop error: %s", e)
+
+
+# In-process PocketBase MCP server (mcp__pb__*). Lets the SDK session read/write
+# Smart Note data via real tools instead of hand-rolled Bash + curl. Built once
+# at import; only registered into ClaudeAgentOptions when PB creds are present.
+PB_MCP_SERVER = pb_tools.build_server() if pb_tools.enabled() else None
+if PB_MCP_SERVER:
+    log.info("PocketBase MCP tools enabled: %s",
+             ", ".join(pb_tools.SAFE_TOOL_NAMES + pb_tools.GATED_TOOL_NAMES))
 
 
 # Tools that auto-approve in CODE mode. Everything else hits the permission callback.
@@ -331,6 +341,20 @@ def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
     else:  # code mode
         kwargs["system_prompt"] = {"type": "preset", "preset": "claude_code"}
         kwargs["allowed_tools"] = list(AUTO_ALLOW)
+
+    # PocketBase tools: register the in-process MCP server and pre-approve the
+    # read/safe-write tools (matching the old auto-allowed localhost curl path).
+    # Destructive tools stay out of allowed_tools, so they hit can_use_tool and
+    # the phone permission prompt.
+    if PB_MCP_SERVER:
+        kwargs["mcp_servers"] = {pb_tools.SERVER_NAME: PB_MCP_SERVER}
+        kwargs["allowed_tools"] = kwargs["allowed_tools"] + pb_tools.SAFE_TOOL_NAMES
+        if isinstance(kwargs["system_prompt"], str):
+            kwargs["system_prompt"] = kwargs["system_prompt"] + "\n\n" + pb_tools.PROMPT_HINT
+        else:
+            kwargs["system_prompt"] = {**kwargs["system_prompt"],
+                                       "append": pb_tools.PROMPT_HINT}
+
     if state.model:
         kwargs["model"] = state.model
     if resume_sdk_id:
