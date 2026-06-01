@@ -108,10 +108,19 @@ async def _pb_refresh_loop() -> None:
 # In-process PocketBase MCP server (mcp__pb__*). Lets the SDK session read/write
 # Smart Note data via real tools instead of hand-rolled Bash + curl. Built once
 # at import; only registered into ClaudeAgentOptions when PB creds are present.
-PB_MCP_SERVER = pb_tools.build_server() if pb_tools.enabled() else None
-if PB_MCP_SERVER:
-    log.info("PocketBase MCP tools enabled: %s",
-             ", ".join(pb_tools.SAFE_TOOL_NAMES + pb_tools.GATED_TOOL_NAMES))
+# Guarded so any init failure degrades to "PB tools off" rather than taking the
+# whole service down — every pre-existing feature must keep working regardless.
+PB_MCP_SERVER = None
+try:
+    if pb_tools.enabled():
+        PB_MCP_SERVER = pb_tools.build_server()
+        log.info("PocketBase MCP tools enabled: %s",
+                 ", ".join(pb_tools.SAFE_TOOL_NAMES + pb_tools.GATED_TOOL_NAMES))
+    else:
+        log.info("PocketBase MCP tools disabled (POCKETBASE_* env not set)")
+except Exception as e:
+    PB_MCP_SERVER = None
+    log.exception("PocketBase MCP tools failed to init, continuing without them: %s", e)
 
 
 # Tools that auto-approve in CODE mode. Everything else hits the permission callback.
