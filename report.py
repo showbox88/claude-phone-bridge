@@ -10,7 +10,7 @@ Schedule + toggle live in db.settings under key "weekly_report":
       "weekday": 1..7,   # ISO: 1=Mon .. 7=Sun
       "hour":    0..23,
       "minute":  0..59,
-      "timezone": "Asia/Shanghai",
+      "timezone": "America/New_York",
       "last_period_start_iso": "YYYY-MM-DD"  # week-start of the last sent report
     }
 """
@@ -36,7 +36,7 @@ DEFAULTS: dict[str, Any] = {
     "weekday": 1,
     "hour": 9,
     "minute": 0,
-    "timezone": "Asia/Shanghai",
+    "timezone": "America/New_York",
     "last_period_start_iso": None,
 }
 
@@ -48,11 +48,11 @@ def load() -> dict[str, Any]:
     merged["hour"]    = max(0, min(23, int(merged.get("hour", 9))))
     merged["minute"]  = max(0, min(59, int(merged.get("minute", 0))))
     merged["enabled"] = bool(merged.get("enabled", True))
-    tz = str(merged.get("timezone") or "Asia/Shanghai")
+    tz = str(merged.get("timezone") or "America/New_York")
     try:
         ZoneInfo(tz)
     except Exception:
-        tz = "Asia/Shanghai"
+        tz = "America/New_York"
     merged["timezone"] = tz
     return merged
 
@@ -68,7 +68,7 @@ def _tz(name: str) -> ZoneInfo:
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo("Asia/Shanghai")
+        return ZoneInfo("America/New_York")
 
 
 def previous_week_window(now_local: dt.datetime) -> tuple[dt.datetime, dt.datetime, str]:
