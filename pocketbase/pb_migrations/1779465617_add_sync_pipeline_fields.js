@@ -15,16 +15,18 @@ const PIPELINE_FIELDS = [
 migrate((app) => {
   for (const name of SYNC_TARGETS) {
     const c = app.findCollectionByNameOrId(name);
-    const existing = new Set(c.fields.map((f) => f.name));
     let touched = false;
     for (const spec of PIPELINE_FIELDS) {
-      if (existing.has(spec.name)) continue;
-      c.fields.push(new Field(spec));
+      if (c.fields.getByName(spec.name)) continue;
+      c.fields.add(new Field(spec));
       touched = true;
     }
     const idxName = `idx_${name}_notion_id`;
-    if (!c.indexes.some((s) => s.includes(idxName))) {
-      c.indexes.push(`CREATE UNIQUE INDEX ${idxName} ON ${name} (notion_id) WHERE notion_id != ''`);
+    const indexes = [...(c.indexes || [])];
+    if (!indexes.some((s) => s.includes(idxName))) {
+      c.indexes = [...indexes,
+        `CREATE UNIQUE INDEX ${idxName} ON ${name} (notion_id) WHERE notion_id != ''`,
+      ];
       touched = true;
     }
     if (touched) app.save(c);
@@ -33,9 +35,16 @@ migrate((app) => {
   for (const name of SYNC_TARGETS) {
     try {
       const c = app.findCollectionByNameOrId(name);
-      c.fields = c.fields.filter((f) => !["notion_id", "notion_last_edited", "last_synced_at"].includes(f.name));
-      c.indexes = c.indexes.filter((s) => !s.includes(`idx_${name}_notion_id`));
-      app.save(c);
+      let touched = false;
+      for (const fname of ["notion_id", "notion_last_edited", "last_synced_at"]) {
+        const f = c.fields.getByName(fname);
+        if (f) { c.fields.removeById(f.id); touched = true; }
+      }
+      const idxName = `idx_${name}_notion_id`;
+      const before = c.indexes || [];
+      const after = before.filter((s) => !s.includes(idxName));
+      if (after.length !== before.length) { c.indexes = after; touched = true; }
+      if (touched) app.save(c);
     } catch (e) {}
   }
 });
