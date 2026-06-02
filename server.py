@@ -15,6 +15,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1701,11 +1702,8 @@ async def api_sessions_delete(sid: str):
     # remove uploads dir for this session
     sdir = uploads_dir() / sid
     if sdir.is_dir():
-        for p in sdir.iterdir():
-            with contextlib.suppress(OSError):
-                p.unlink()
         with contextlib.suppress(OSError):
-            sdir.rmdir()
+            shutil.rmtree(sdir)
     if state.session_id == sid:
         # spin up a new session as current
         latest = db.latest_session_id()
@@ -1890,11 +1888,8 @@ async def handle_cmd(msg: dict) -> None:
             db.delete_session(sid)
             sdir = uploads_dir() / sid
             if sdir.is_dir():
-                for p in sdir.iterdir():
-                    with contextlib.suppress(OSError):
-                        p.unlink()
                 with contextlib.suppress(OSError):
-                    sdir.rmdir()
+                    shutil.rmtree(sdir)
             if state.session_id == sid:
                 latest = db.latest_session_id()
                 if latest:
