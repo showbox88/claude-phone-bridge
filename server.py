@@ -1740,15 +1740,25 @@ async def api_upload(
         kind = classify_upload(original_name, mime)
         if not kind:
             raise HTTPException(400, f"unsupported file type: {original_name}")
-        # Preserve a sensible extension for later mime detection on disk.
-        if kind == "image" and mime in ALLOWED_IMAGE_MIMES:
-            ext = mimetypes.guess_extension(mime) or ext_in or ".bin"
-            if ext == ".jpe":
-                ext = ".jpg"
-        else:
-            ext = ext_in or ".bin"
-        name = f"{uuid.uuid4().hex}{ext}"
-        dest = sdir / name
+        # Sanitize the user's original filename; this becomes the on-disk
+        # basename so Claude (and `ls`) see the real name.
+        safe_name = _safe_filename(original_name)
+        # If the sanitized name has no extension AND we have a higher-confidence
+        # mime-derived one for images, append it. Other kinds keep whatever the
+        # user provided (PDF/text/sheet extensions are already meaningful).
+        if "." not in safe_name and kind == "image" and mime in ALLOWED_IMAGE_MIMES:
+            guessed = mimetypes.guess_extension(mime) or ""
+            if guessed == ".jpe":
+                guessed = ".jpg"
+            if guessed:
+                safe_name = safe_name + guessed
+        # Each file gets its own short-uuid subdir; eliminates name collisions
+        # within a session and keeps cleanup as a single rmtree.
+        uid = uuid.uuid4().hex[:8]
+        sub = sdir / uid
+        sub.mkdir(parents=True, exist_ok=True)
+        dest = sub / safe_name
+        name = f"{uid}/{safe_name}"  # used in the relative path below
         size = 0
         with dest.open("wb") as out:
             while True:
