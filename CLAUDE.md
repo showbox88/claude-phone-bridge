@@ -61,6 +61,40 @@ ssh dashboard-server 'systemctl status phone-bridge'
 - Don't change `DEFAULT_CWD` to a path Claude shouldn't have access to —
   Claude can spawn shell commands within `cwd` and below.
 
+## Notion sync (PR1 baseline)
+
+PR1 wires up the schema and the initial data alignment between PB and Notion
+for 6 collections (trips/days/plans/todos/contacts/locations). Cron-driven
+sync lands in PR2; this section covers manual operations only.
+
+**Sync metadata:**
+- PB collections `sync_config` (per-collection) and `sync_global` (timezone,
+  sync hour, paused) — created by migration `1779465616_create_sync_meta.js`
+- Pipeline fields on each synced PB collection: `notion_id`,
+  `notion_last_edited`, `last_synced_at` — added by migration
+  `1779465617_add_sync_pipeline_fields.js`
+- Pipeline columns on each Notion DB: `pb_id`, `last_synced_at` — added by
+  `scripts/setup_notion_sync_db.py`
+- Notion DB "Sync Activity" — created by `setup_notion_sync_db.py`, id stored
+  in `.env` as `NOTION_SYNC_ACTIVITY_DB_ID`
+
+**Re-running reconcile:**
+
+```bash
+ssh dashboard-server
+cd /home/dev/phone-bridge
+.venv/bin/python scripts/reconcile_initial.py --only <collection> --dry-run
+.venv/bin/python scripts/reconcile_initial.py --only <collection>
+```
+
+The script backs up PB to `.bridge_data/backups/<ts>/` before any write, so
+partial failures are recoverable.
+
+**Reviewing duplicates:** open the Sync Activity Notion DB → filter for
+`op=Possible duplicate` and `decision=Pending` → for each row, look at the
+two snapshots and set `decision` to `Use Notion` / `Use PB` / `Keep both`.
+PR3 will auto-apply these; for PR1 the choice is just recorded.
+
 ## Architecture
 
 ```
