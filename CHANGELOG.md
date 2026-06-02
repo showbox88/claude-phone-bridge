@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-06 — phone-bridge 直接用 PocketBase 工具 (`mcp__pb__*`)
+
+- **背景**：之前本机/手机的 Claude SDK 会话读写 PocketBase 只能靠 Bash + curl
+  （`$PB_URL`/`$PB_TOKEN`），`can_use_tool` 里专门 fast-path 放行 localhost:8090 的
+  curl。`mcp_pb/` 那套真正的 MCP 工具只服务 claude.ai 云端 Connector，本机 SDK 用不上。
+- **改动**：新增 [`pb_tools.py`](./pb_tools.py)——一个**进程内** SDK MCP server
+  （`create_sdk_mcp_server` + `@tool`），把 `mcp_pb` 的 CRUD 工具面镜像进来，让
+  phone-bridge 自己的 SDK 会话直接调 `mcp__pb__*`，不再手搓 curl。
+- **工具面**（与 `mcp_pb` 对齐）：`pb_list_collections / pb_search / pb_get /
+  pb_get_collection / pb_create / pb_update / smartnote_open_context`（读 + 安全写）
+  以及 `pb_delete / pb_create_collection / pb_update_collection /
+  pb_delete_collection`（破坏性 / 改 schema）。
+- **权限分级**：读 + 安全写的 7 个工具放进 `allowed_tools` 预批（无需手机确认，等价于
+  老的 localhost curl fast-path）；4 个破坏性工具**故意不预批**，走 `can_use_tool` →
+  手机权限卡（或 YOLO 自动批）。Chat / Code 两种模式都注册该 server。
+- **认证**：`pb_tools.py` 自带 25 分钟 token 缓存 + 失效重新 auth，读同一套
+  `POCKETBASE_*` 环境变量；与 `server.py` 那条 12h 刷新 loop 解耦，互不影响。urllib
+  阻塞调用统一包进 `asyncio.to_thread`，不卡 FastAPI 事件循环。
+- **提示词**：PB creds 存在时，给两种模式的 system prompt 追加一段说明（chat 直接拼字符串，
+  code preset 用 `append`），告诉 Claude 优先用 `pb_*` 工具、开局先 `pb_list_collections`。
+- **降级**：没配 `POCKETBASE_URL/EMAIL/PASSWORD` 时 `pb_tools.enabled()` 为 False，
+  整个 MCP server 不注册，行为回到改动前。老的 Bash+curl fast-path 仍保留，CHECKIN.md 流程不受影响。
+
+## 2026-05 — 周报 (Weekly Report)
+
+- **功能**：每周（默认周一 09:00 Asia/Shanghai）自动新建一个 Chat 会话，标题
+  `📊 周报 2026-Wxx`，里面是 markdown 周报（总轮次/花销/Token/按模型/Top cwd/Top 会话）。
+- **数据来源**：现有 `turns` 表 + `sessions` 表，新增 `db.range_summary(start_ts, end_ts)`。
+  不调 Claude API、不消耗额度。
+- **配置 UI**：⋯ 菜单 → `周报设置`。可改开关/星期/时间，"立即生成一份"按钮回填上周。
+- **持久化**：开关/时间/上次生成的周存 SQLite `settings` 表（新增）。
+- **架构**：`report.py`（独立模块），`scheduler_loop` 在 `lifespan` 起 background task，
+  每小时唤醒检查一次配置和触发条件，配置改了无需重启。生成后 Web Push 通知。
+
 ## 2026-05 — 期间大改
 
 代码改动量极大，但 commit 节奏稀疏。下面按主题整理「实际上线了什么、为什么、怎么用」。

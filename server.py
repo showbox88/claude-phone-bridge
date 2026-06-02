@@ -13,7 +13,9 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
+import shutil
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -48,6 +50,7 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 import db
 import push
 import report
+import pb_tools
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -102,6 +105,24 @@ async def _pb_refresh_loop() -> None:
             break
         except Exception as e:
             log.exception("PB refresh loop error: %s", e)
+
+
+# In-process PocketBase MCP server (mcp__pb__*). Lets the SDK session read/write
+# Smart Note data via real tools instead of hand-rolled Bash + curl. Built once
+# at import; only registered into ClaudeAgentOptions when PB creds are present.
+# Guarded so any init failure degrades to "PB tools off" rather than taking the
+# whole service down — every pre-existing feature must keep working regardless.
+PB_MCP_SERVER = None
+try:
+    if pb_tools.enabled():
+        PB_MCP_SERVER = pb_tools.build_server()
+        log.info("PocketBase MCP tools enabled: %s",
+                 ", ".join(pb_tools.SAFE_TOOL_NAMES + pb_tools.GATED_TOOL_NAMES))
+    else:
+        log.info("PocketBase MCP tools disabled (POCKETBASE_* env not set)")
+except Exception as e:
+    PB_MCP_SERVER = None
+    log.exception("PocketBase MCP tools failed to init, continuing without them: %s", e)
 
 
 # Tools that auto-approve in CODE mode. Everything else hits the permission callback.
@@ -331,6 +352,20 @@ def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
     else:  # code mode
         kwargs["system_prompt"] = {"type": "preset", "preset": "claude_code"}
         kwargs["allowed_tools"] = list(AUTO_ALLOW)
+
+    # PocketBase tools: register the in-process MCP server and pre-approve the
+    # read/safe-write tools (matching the old auto-allowed localhost curl path).
+    # Destructive tools stay out of allowed_tools, so they hit can_use_tool and
+    # the phone permission prompt.
+    if PB_MCP_SERVER:
+        kwargs["mcp_servers"] = {pb_tools.SERVER_NAME: PB_MCP_SERVER}
+        kwargs["allowed_tools"] = kwargs["allowed_tools"] + pb_tools.SAFE_TOOL_NAMES
+        if isinstance(kwargs["system_prompt"], str):
+            kwargs["system_prompt"] = kwargs["system_prompt"] + "\n\n" + pb_tools.PROMPT_HINT
+        else:
+            kwargs["system_prompt"] = {**kwargs["system_prompt"],
+                                       "append": pb_tools.PROMPT_HINT}
+
     if state.model:
         kwargs["model"] = state.model
     if resume_sdk_id:
@@ -401,6 +436,24 @@ def classify_upload(filename: str, mime: str) -> str:
     return ""
 
 
+def _safe_filename(name: str) -> str:
+    """Strip filesystem-hostile bytes from an uploaded filename.
+
+    Preserves spaces and Unicode (CJK, emoji); rejects only path separators,
+    control bytes, leading dots, and over-long names. Falls back to
+    'upload.bin' when nothing usable remains.
+    """
+    # basename only — drop any path components the client tried to sneak in
+    name = name.replace("\\", "/").rsplit("/", 1)[-1]
+    # control chars (incl. null) — disallowed on all real filesystems
+    name = re.sub(r"[\x00-\x1f]", "", name)
+    # no leading dot (avoid hidden files / dotfile collisions)
+    name = name.lstrip(".")
+    # cap length to stay well under filesystem limits
+    name = name[:200]
+    return name or "upload.bin"
+
+
 def _read_text_safe(path: Path) -> str:
     """Read a text file with reasonable encoding fallbacks."""
     try:
@@ -458,6 +511,7 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
     udir = uploads_dir()
     inline_text_blobs: list[str] = []   # text/sheet content collected for the text block
     blocks: list[dict] = []             # image/document content blocks
+    advertised_paths: list[tuple[Path, str]] = []  # (abs_p, mime) for the trailing path block
 
     for rel in images[:MAX_IMAGES_PER_MESSAGE]:
         rel_norm = rel.replace("\\", "/").lstrip("/")
@@ -478,18 +532,22 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
                 "type": "image",
                 "source": {"type": "base64", "media_type": mime, "data": data},
             })
+            advertised_paths.append((abs_p, mime))
         elif kind == "pdf":
             data = base64.standard_b64encode(abs_p.read_bytes()).decode("ascii")
             blocks.append({
                 "type": "document",
                 "source": {"type": "base64", "media_type": "application/pdf", "data": data},
             })
+            advertised_paths.append((abs_p, mime))
         elif kind == "text":
             body = _read_text_safe(abs_p)
             inline_text_blobs.append(f"\n--- 附件: {abs_p.name} ---\n```\n{body}\n```")
+            advertised_paths.append((abs_p, mime))
         elif kind == "sheet":
             body = _read_xlsx_as_text(abs_p)
             inline_text_blobs.append(f"\n--- 附件: {abs_p.name} ---\n```csv\n{body}\n```")
+            advertised_paths.append((abs_p, mime))
         else:
             log.warning("skipping unsupported file %s", abs_p)
 
@@ -498,6 +556,27 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
     full_text = "\n".join(text_parts).strip() or "(no text)"
     content: list[dict] = [{"type": "text", "text": full_text}]
     content.extend(blocks)
+
+    # Trailing "files on disk" block so Claude can Read / Bash on the originals.
+    if advertised_paths:
+        path_lines = []
+        for abs_p, mime in advertised_paths:
+            try:
+                size_kb = max(1, abs_p.stat().st_size // 1024)
+            except OSError:
+                continue
+            path_lines.append(f"- {abs_p} ({mime}, {size_kb} KB)")
+        if path_lines:
+            content.append({
+                "type": "text",
+                "text": (
+                    "[Attached files on server disk — you can read, rename, move, "
+                    "or upload them with Bash or Read tools:\n"
+                    + "\n".join(path_lines)
+                    + "]"
+                ),
+            })
+
     return content
 
 
@@ -1649,11 +1728,8 @@ async def api_sessions_delete(sid: str):
     # remove uploads dir for this session
     sdir = uploads_dir() / sid
     if sdir.is_dir():
-        for p in sdir.iterdir():
-            with contextlib.suppress(OSError):
-                p.unlink()
         with contextlib.suppress(OSError):
-            sdir.rmdir()
+            shutil.rmtree(sdir)
     if state.session_id == sid:
         # spin up a new session as current
         latest = db.latest_session_id()
@@ -1688,15 +1764,25 @@ async def api_upload(
         kind = classify_upload(original_name, mime)
         if not kind:
             raise HTTPException(400, f"unsupported file type: {original_name}")
-        # Preserve a sensible extension for later mime detection on disk.
-        if kind == "image" and mime in ALLOWED_IMAGE_MIMES:
-            ext = mimetypes.guess_extension(mime) or ext_in or ".bin"
-            if ext == ".jpe":
-                ext = ".jpg"
-        else:
-            ext = ext_in or ".bin"
-        name = f"{uuid.uuid4().hex}{ext}"
-        dest = sdir / name
+        # Sanitize the user's original filename; this becomes the on-disk
+        # basename so Claude (and `ls`) see the real name.
+        safe_name = _safe_filename(original_name)
+        # If the sanitized name has no extension AND we have a higher-confidence
+        # mime-derived one for images, append it. Other kinds keep whatever the
+        # user provided (PDF/text/sheet extensions are already meaningful).
+        if "." not in safe_name and kind == "image" and mime in ALLOWED_IMAGE_MIMES:
+            guessed = mimetypes.guess_extension(mime) or ""
+            if guessed == ".jpe":
+                guessed = ".jpg"
+            if guessed:
+                safe_name = safe_name + guessed
+        # Each file gets its own short-uuid subdir; eliminates name collisions
+        # within a session and keeps cleanup as a single rmtree.
+        uid = uuid.uuid4().hex[:8]
+        sub = sdir / uid
+        sub.mkdir(parents=True, exist_ok=True)
+        dest = sub / safe_name
+        name = f"{uid}/{safe_name}"  # used in the relative path below
         size = 0
         with dest.open("wb") as out:
             while True:
@@ -1828,11 +1914,8 @@ async def handle_cmd(msg: dict) -> None:
             db.delete_session(sid)
             sdir = uploads_dir() / sid
             if sdir.is_dir():
-                for p in sdir.iterdir():
-                    with contextlib.suppress(OSError):
-                        p.unlink()
                 with contextlib.suppress(OSError):
-                    sdir.rmdir()
+                    shutil.rmtree(sdir)
             if state.session_id == sid:
                 latest = db.latest_session_id()
                 if latest:
