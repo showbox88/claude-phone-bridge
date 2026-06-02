@@ -195,6 +195,11 @@ def reconcile_one(collection: str, notion_db_id: str,
             else:
                 print(f"  [dry] queue Notion={npage['id'][:8]} ↔ "
                        f"PB={m.record['_pb']['id'][:8]} ({m.score:.2f})")
+            # Critical: mark both IDs as used so phase 3 doesn't create phantom
+            # counterparts. The user will resolve the pair in Sync Activity;
+            # PR3 will apply their decision.
+            used_pb_ids.add(m.record["_pb"]["id"])
+            used_notion_ids.add(npage["id"])
             queued += 1
 
     pb_only = [r for r in pb_unmatched if r["id"] not in used_pb_ids]

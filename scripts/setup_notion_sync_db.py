@@ -95,8 +95,33 @@ def find_or_create_activity_db(nc: NotionClient, parent_page_id: str) -> str:
 
     db = nc.create_database(parent_page_id, "Sync Activity", SYNC_ACTIVITY_PROPERTIES)
     print(f"  [ok]   created Sync Activity DB: {db['id']}")
-    print(f"         ADD TO .env: NOTION_SYNC_ACTIVITY_DB_ID={db['id']}")
+    _persist_activity_db_id(db["id"])
     return db["id"]
+
+
+def _persist_activity_db_id(db_id: str) -> None:
+    """Append NOTION_SYNC_ACTIVITY_DB_ID to .env so reconcile_initial finds it.
+
+    Looks for .env in the project root (parent of scripts/). If a line already
+    exists for this key, leaves the file alone and prints a warning so the
+    user can update it manually.
+    """
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        print(f"         WARN: {env_path} not found — add manually: "
+              f"NOTION_SYNC_ACTIVITY_DB_ID={db_id}")
+        return
+    existing_lines = env_path.read_text(encoding="utf-8").splitlines()
+    for line in existing_lines:
+        if line.strip().startswith("NOTION_SYNC_ACTIVITY_DB_ID="):
+            print(f"         WARN: .env already has NOTION_SYNC_ACTIVITY_DB_ID — "
+                  f"please update to {db_id} manually")
+            return
+    # Append with leading newline if file doesn't end in one.
+    sep = "" if env_path.read_text(encoding="utf-8").endswith("\n") else "\n"
+    with env_path.open("a", encoding="utf-8") as f:
+        f.write(f"{sep}NOTION_SYNC_ACTIVITY_DB_ID={db_id}\n")
+    print(f"         [ok] appended NOTION_SYNC_ACTIVITY_DB_ID to {env_path}")
 
 
 def seed_sync_config(pb: PBClient) -> None:
