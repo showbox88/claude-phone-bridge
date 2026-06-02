@@ -117,3 +117,17 @@ def test_roundtrip_multi_select():
     notion_resp = {"type": "multi_select", **notion}
     back = notion_property_to_pb_field(notion_resp, pb_type="select", max_select=5)
     assert back == pb_val
+
+
+def test_snake_to_title_handles_consecutive_underscores():
+    # Defensive — not expected in real PB fields but shouldn't double-space.
+    assert snake_to_title("foo__bar") == "Foo Bar"
+    assert snake_to_title("__leading") == "Leading"
+    assert snake_to_title("trailing__") == "Trailing"
+
+
+def test_rich_text_str_guards_non_dict_items():
+    # Formula/rollup occasionally returns weird shapes; don't crash.
+    notion_prop = {"type": "rich_text",
+                   "rich_text": [None, {"plain_text": "hello"}, "stringy"]}
+    assert notion_property_to_pb_field(notion_prop, pb_type="text") == "hello"

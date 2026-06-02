@@ -12,6 +12,7 @@ collection field spec (caller looks it up via list_collections()).
 """
 from __future__ import annotations
 
+import json as _json
 from typing import Any
 
 
@@ -21,8 +22,11 @@ def _rich_text_str(item: dict) -> str:
     Notion API responses include a flat ``plain_text`` field; request bodies
     we send don't (we send only ``{"text": {"content": "..."}}``). The codec
     must accept both so round-trip conversion works without simulating the
-    plain_text addition.
+    plain_text addition. Returns "" for non-dict items (defensive against
+    formula/rollup oddities).
     """
+    if not isinstance(item, dict):
+        return ""
     pt = item.get("plain_text")
     if pt is not None:
         return pt
@@ -30,8 +34,8 @@ def _rich_text_str(item: dict) -> str:
 
 
 def snake_to_title(name: str) -> str:
-    """departure_time -> Departure Time"""
-    return " ".join(word.capitalize() for word in name.split("_"))
+    """departure_time -> Departure Time. Skips empty segments from consecutive underscores."""
+    return " ".join(word.capitalize() for word in name.split("_") if word)
 
 
 def title_to_snake(name: str) -> str:
@@ -76,7 +80,6 @@ def pb_field_to_notion_property(value: Any, *,
         return {"relation": [{"id": i} for i in ids if i]}
 
     if pb_type == "json":
-        import json as _json
         return {"rich_text": [{"type": "text",
                                 "text": {"content": _json.dumps(value, ensure_ascii=False)}}]}
 
