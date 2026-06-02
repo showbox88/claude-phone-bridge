@@ -13,6 +13,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import secrets
 import uuid
 from contextlib import asynccontextmanager
@@ -432,6 +433,24 @@ def classify_upload(filename: str, mime: str) -> str:
     if ext in SHEET_EXTS:
         return "sheet"
     return ""
+
+
+def _safe_filename(name: str) -> str:
+    """Strip filesystem-hostile bytes from an uploaded filename.
+
+    Preserves spaces and Unicode (CJK, emoji); rejects only path separators,
+    control bytes, leading dots, and over-long names. Falls back to
+    'upload.bin' when nothing usable remains.
+    """
+    # basename only — drop any path components the client tried to sneak in
+    name = name.replace("\\", "/").rsplit("/", 1)[-1]
+    # control chars (incl. null) — disallowed on all real filesystems
+    name = re.sub(r"[\x00-\x1f]", "", name)
+    # no leading dot (avoid hidden files / dotfile collisions)
+    name = name.lstrip(".")
+    # cap length to stay well under filesystem limits
+    name = name[:200]
+    return name or "upload.bin"
 
 
 def _read_text_safe(path: Path) -> str:
