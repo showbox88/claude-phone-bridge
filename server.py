@@ -511,6 +511,7 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
     udir = uploads_dir()
     inline_text_blobs: list[str] = []   # text/sheet content collected for the text block
     blocks: list[dict] = []             # image/document content blocks
+    advertised_paths: list[tuple[Path, str]] = []  # (abs_p, mime) for the trailing path block
 
     for rel in images[:MAX_IMAGES_PER_MESSAGE]:
         rel_norm = rel.replace("\\", "/").lstrip("/")
@@ -531,18 +532,22 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
                 "type": "image",
                 "source": {"type": "base64", "media_type": mime, "data": data},
             })
+            advertised_paths.append((abs_p, mime))
         elif kind == "pdf":
             data = base64.standard_b64encode(abs_p.read_bytes()).decode("ascii")
             blocks.append({
                 "type": "document",
                 "source": {"type": "base64", "media_type": "application/pdf", "data": data},
             })
+            advertised_paths.append((abs_p, mime))
         elif kind == "text":
             body = _read_text_safe(abs_p)
             inline_text_blobs.append(f"\n--- 附件: {abs_p.name} ---\n```\n{body}\n```")
+            advertised_paths.append((abs_p, mime))
         elif kind == "sheet":
             body = _read_xlsx_as_text(abs_p)
             inline_text_blobs.append(f"\n--- 附件: {abs_p.name} ---\n```csv\n{body}\n```")
+            advertised_paths.append((abs_p, mime))
         else:
             log.warning("skipping unsupported file %s", abs_p)
 
@@ -551,6 +556,27 @@ def _build_user_content(text: str, images: list[str], files: list[str]) -> list[
     full_text = "\n".join(text_parts).strip() or "(no text)"
     content: list[dict] = [{"type": "text", "text": full_text}]
     content.extend(blocks)
+
+    # Trailing "files on disk" block so Claude can Read / Bash on the originals.
+    if advertised_paths:
+        path_lines = []
+        for abs_p, mime in advertised_paths:
+            try:
+                size_kb = max(1, abs_p.stat().st_size // 1024)
+            except OSError:
+                continue
+            path_lines.append(f"- {abs_p} ({mime}, {size_kb} KB)")
+        if path_lines:
+            content.append({
+                "type": "text",
+                "text": (
+                    "[Attached files on server disk — you can read, rename, move, "
+                    "or upload them with Bash or Read tools:\n"
+                    + "\n".join(path_lines)
+                    + "]"
+                ),
+            })
+
     return content
 
 
