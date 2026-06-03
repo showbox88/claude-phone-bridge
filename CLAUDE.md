@@ -68,6 +68,17 @@ tools, in-app chat-session alerts, 90-day cleanup. See
 **[docs/notion-pb-sync.md](docs/notion-pb-sync.md)** for the full
 architecture / data model / flow / runbook.
 
+## Trip data model: stops redesign (in-flight)
+
+`days` is being split into a pure container (`days`) + atomic events (`stops`)
+so a real travel day can hold many events. See
+**[docs/superpowers/specs/2026-06-03-stops-redesign-design.md](docs/superpowers/specs/2026-06-03-stops-redesign-design.md)**
+for architecture and **[docs/stops-redesign-runbook.md](docs/stops-redesign-runbook.md)**
+for the 5-phase migration runbook. Phase 1 migrations + Phase 2 script + Phase 3
+migration are written and committed; deploy + data migration is operator-driven
+per the runbook. Relation sync is explicitly out of scope this round — tracked
+as a future PR.
+
 Quick reference (the rest of this section is the operational TL;DR — for
 anything deeper, read the doc):
 
