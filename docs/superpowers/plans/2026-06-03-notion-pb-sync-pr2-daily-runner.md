@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Wire up the daily background sync. Each hour systemd fires `notion_sync.runner`; the runner checks whether the local hour in the configured timezone matches `sync_global.sync_hour_local`; if yes it walks every enabled `sync_config` row and performs sync. Single-side changes / new rows are pushed and logged to Sync Activity as `Auto-applied`. Conflicts (both sides changed) and deletions (one side disappeared) are **detected and enqueued to Sync Activity with `decision=Pending`** so the user can review snapshots and pick a winner. PR2 does **not** apply user-set decisions yet (that's PR3's "decision applier"), but the queue is populated and visible. Operational events (run start/end, errors) go to `.bridge_data/sync.log`.
+**Goal:** Wire up the daily background sync. Each hour systemd fires `notion_sync.runner`; the runner checks whether the local hour in the configured timezone matches `sync_global.sync_hour_local`; if yes it walks every enabled `sync_config` row. **Single-side changes / new rows are synced silently — Sync Activity is not touched** (the data itself is the visible result; an audit row would just be noise). **Only things that need user attention go to Sync Activity:** conflicts (both sides changed) and deletions (one side disappeared) are enqueued with `decision=Pending`, snapshots preserved. PR2 does **not** apply user-set decisions yet (that's PR3's "decision applier"). Operational events (run start/end, errors) go to `.bridge_data/sync.log`.
 
-**Architecture:** A new `notion_sync/runner.py` is the entry point. It pulls "changes since last_synced_at" from both sides per collection, joins on `pb_id` / `notion_id`, and routes each row into one of: skip (no change), auto-apply PB→Notion, auto-apply Notion→PB, conflict-enqueue, delete-enqueue. A new `notion_sync/changeset.py` holds the pure categorizer logic (heavily tested). `notion_sync/activity.py` gets a small `pending_action_exists()` helper so re-detected conflicts/deletes don't duplicate-write to Sync Activity. Two systemd unit files (`notion-sync.service` + `notion-sync.timer`) install via a deploy hook. Operational logs (run boundaries, apply errors) go to `.bridge_data/sync.log`.
+**Architecture:** A new `notion_sync/runner.py` is the entry point. It pulls "changes since last_synced_at" from both sides per collection, joins on `pb_id` / `notion_id`, and routes each row into one of: skip (no change), apply PB→Notion silently, apply Notion→PB silently, enqueue Conflict, enqueue Delete?. A new `notion_sync/changeset.py` holds the pure categorizer logic (heavily tested). `notion_sync/activity.py` gets a small `pending_action_exists()` helper so re-detected conflicts/deletes don't duplicate-write to Sync Activity; the unused `write_auto_applied` is removed (user rejected the audit-log pattern). Two systemd unit files (`notion-sync.service` + `notion-sync.timer`) install via a deploy hook. Operational logs (run boundaries, apply errors) go to `.bridge_data/sync.log`.
 
 **Tech Stack:** Same as PR1 — Python stdlib + the existing `notion_sync` modules. `zoneinfo` (stdlib, Python 3.9+) for timezone handling. systemd `oneshot` service + hourly timer.
 
@@ -17,7 +17,7 @@
 **Created:**
 - `notion_sync/changeset.py` — pure logic: given pb_rows + notion_rows + last_synced_at, categorize each row into `NoChange` / `PbOnlyChange` / `NotionOnlyChange` / `BothChanged` / `PbNew` / `NotionNew` / `NotionVanished` / `PbVanished`.
 - `notion_sync/transform.py` — shared row transforms moved out of `reconcile_initial.py` so `runner.py` can reuse them.
-- `notion_sync/runner.py` — the orchestrator. Reads sync_global, time-guards, walks sync_config rows, dispatches per-categorization, writes Auto-applied to Sync Activity, enqueues conflicts/deletes to Sync Activity with `decision=Pending`.
+- `notion_sync/runner.py` — the orchestrator. Reads sync_global, time-guards, walks sync_config rows, dispatches per-categorization, syncs single-side changes silently, enqueues conflicts/deletes to Sync Activity with `decision=Pending`.
 - `notion_sync/logger.py` — small wrapper that writes structured JSON lines to `.bridge_data/sync.log` for operational events only (run boundaries, per-action errors). Conflicts/deletes do NOT go here — they go to Sync Activity.
 - `tests/notion_sync/test_changeset.py` — table-driven tests covering every categorization branch.
 - `tests/notion_sync/test_runner_guard.py` — tests for the timezone-guard logic only (pure function; doesn't hit PB/Notion).
@@ -27,7 +27,7 @@
 
 **Modified:**
 - `notion_sync/__init__.py` — bump the docstring to reflect PR2 contents.
-- `notion_sync/activity.py` — add one small helper `pending_action_exists()` for idempotent enqueue (checks if a Pending row already exists for a given pb_id/notion_id/op).
+- `notion_sync/activity.py` — add `pending_action_exists()` helper for idempotent enqueue; remove `write_auto_applied` (unused, audit-log pattern rejected per user preference).
 - `scripts/reconcile_initial.py` — replace the three transform functions with `from notion_sync.transform import ...` (refactor only — same behavior).
 - `CLAUDE.md` — replace the "PR1 baseline" note with a fuller "Notion sync" section covering daily operation, where conflicts appear, how to pause, how to force a manual run.
 
@@ -448,16 +448,20 @@ EOF
 
 ---
 
-## Task 2b: Add `pending_action_exists()` to `notion_sync/activity.py`
+## Task 2b: Modify `notion_sync/activity.py` — add helper, remove unused
 
 **Files:**
 - Modify: `notion_sync/activity.py`
 
-The same conflict will be re-detected on every cron tick until the user resolves it. To avoid spamming Sync Activity with N copies of the same conflict, the runner queries first and skips if a Pending row already exists for that pb_id/notion_id/op.
+Two changes:
+1. Add `pending_action_exists()` — query Sync Activity for an existing Pending row matching `pb_id`/`notion_id`/`op`, used so re-detected conflicts/deletes don't duplicate-write.
+2. Remove `write_auto_applied` — it was PR1 forward-scaffolding, but PR2 decided not to audit-log silent syncs (user preference: Sync Activity is a pending-action queue, not a log).
 
-### Step 1: Append this function to `notion_sync/activity.py`
+### Step 1: Edit `notion_sync/activity.py`
 
-Add after the existing `write_delete_question` function:
+Delete the entire `write_auto_applied` function (≈18 lines).
+
+Append after the existing `write_delete_question`:
 
 ```python
 def pending_action_exists(client, *, op: str, pb_id: str = "",
@@ -465,7 +469,7 @@ def pending_action_exists(client, *, op: str, pb_id: str = "",
     """True iff Sync Activity already has a Pending row for this
     pb_id/notion_id/op combination. Used to make enqueue idempotent.
 
-    At least one of pb_id / notion_id must be non-empty.
+    At least one of pb_id / notion_id should be non-empty.
     """
     db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
     clauses = [
@@ -478,26 +482,30 @@ def pending_action_exists(client, *, op: str, pb_id: str = "",
     if notion_id:
         clauses.append({"property": "notion_id",
                         "rich_text": {"equals": notion_id}})
-    body = {"filter": {"and": clauses}, "page_size": 1}
-    rows = client.query_database(db_id, filter_=body["filter"], page_size=1)
+    rows = client.query_database(db_id, filter_={"and": clauses}, page_size=1)
     return len(rows) > 0
 ```
 
-### Step 2: Smoke-verify it imports
+### Step 2: Smoke-verify imports
 
 ```powershell
-python -c "from notion_sync.activity import pending_action_exists; print('ok')"
+python -c "from notion_sync.activity import pending_action_exists, write_conflict, write_delete_question; print('ok')"
+python -c "from notion_sync.activity import write_auto_applied" 2>&1 | findstr ImportError
 ```
+Second command should print an ImportError line (confirming removal).
 
 ### Step 3: Commit
 
 ```powershell
 git add notion_sync/activity.py
 git commit -m "$(cat <<'EOF'
-PR2: activity.pending_action_exists for idempotent conflict/delete enqueue
+PR2: activity — add pending_action_exists, remove write_auto_applied
 
-Re-detected conflicts must not duplicate-write to Sync Activity. The
-runner queries this before each write_conflict / write_delete_question.
+write_auto_applied was PR1 forward-scaffolding for an audit-log pattern
+the user has since rejected. Single-side syncs in PR2 happen silently;
+only conflicts and deletes (things needing user action) go to Sync
+Activity. pending_action_exists keeps the enqueue idempotent so the
+runner can re-detect the same conflict on every tick without spam.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 EOF
@@ -664,7 +672,6 @@ from zoneinfo import ZoneInfo
 
 from notion_sync.activity import (
     pending_action_exists,
-    write_auto_applied,
     write_conflict,
     write_delete_question,
 )
@@ -742,11 +749,6 @@ def _apply_pb_to_notion(action: PbOnlyChange, *,
         "notion_last_edited": page.get("last_edited_time"),
         "last_synced_at": now_iso_datetime(),
     })
-    write_auto_applied(nc, collection=collection,
-                       direction="PB→Notion",
-                       summary=str(r.get(title_field, ""))[:80],
-                       pb_id=r["id"], notion_id=action.notion_id,
-                       record_link=page.get("url"))
 
 
 def _apply_notion_to_pb(action: NotionOnlyChange, *,
@@ -761,11 +763,6 @@ def _apply_notion_to_pb(action: NotionOnlyChange, *,
         "notion_last_edited": npage.get("last_edited_time"),
         "last_synced_at": now_iso_datetime(),
     })
-    write_auto_applied(nc, collection=collection,
-                       direction="Notion→PB",
-                       summary=str(npage_dict.get(title_field, ""))[:80],
-                       pb_id=action.pb_id, notion_id=npage["id"],
-                       record_link=npage.get("url"))
 
 
 def _apply_pb_new(action: PbNew, *,
@@ -787,11 +784,6 @@ def _apply_pb_new(action: PbNew, *,
         "notion_last_edited": page.get("last_edited_time"),
         "last_synced_at": now_iso_datetime(),
     })
-    write_auto_applied(nc, collection=collection,
-                       direction="PB→Notion",
-                       summary=f"new: {str(r.get(title_field, ''))[:60]}",
-                       pb_id=r["id"], notion_id=page["id"],
-                       record_link=page.get("url"))
 
 
 def _apply_notion_new(action: NotionNew, *,
@@ -812,11 +804,6 @@ def _apply_notion_new(action: NotionNew, *,
                                   "text": {"content": created["id"]}}]},
         "last_synced_at": {"date": {"start": now_iso_date()}},
     })
-    write_auto_applied(nc, collection=collection,
-                       direction="Notion→PB",
-                       summary=f"new: {str(npage_dict.get(title_field, ''))[:60]}",
-                       pb_id=created["id"], notion_id=npage["id"],
-                       record_link=npage.get("url"))
 
 
 def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
@@ -1231,11 +1218,13 @@ notifications.
   silently unless the current hour in that timezone equals the configured
   sync hour.
 - When it does run: for each enabled `sync_config` row it categorizes
-  rows into changed-one-side / changed-both / new / vanished, applies
-  the no-conflict ones, and writes one `Auto-applied` row to Sync Activity
-  per change. **Conflicts and vanishings are enqueued to Sync Activity
-  with `decision=Pending`** so you can review snapshots in Notion and pick
-  a winner. Re-detected conflicts/deletes don't duplicate-write (idempotent).
+  rows into changed-one-side / changed-both / new / vanished. **Single-side
+  changes and new rows are synced silently** — Sync Activity is not
+  touched (the data itself is the visible result).
+- **Conflicts (both sides changed) and deletes (one side vanished) are
+  enqueued to Sync Activity with `decision=Pending`** so you can review
+  snapshots in Notion and pick a winner. Re-detected conflicts/deletes
+  don't duplicate-write (idempotent via `pending_action_exists`).
 - PR2 does **not** auto-apply user decisions yet — that lands in PR3. You
   can still mark decisions in Notion; PR3 will pick them up on first run.
 - `sync_config[*].last_sync_summary` reflects the latest pass.
@@ -1318,18 +1307,18 @@ ssh dashboard-server "tail -10 /home/dev/phone-bridge/.bridge_data/sync.log"
 
 ### Step 4: Round-trip tests
 
-**Test A — PB → Notion auto-apply:**
+**Test A — PB → Notion silent sync:**
 - In Phone Bridge, ask Claude: "Add a todo: PR2 test todo, due tomorrow"
 - Force-run: `.venv/bin/python -m notion_sync.runner --force-now --only todos`
 - Verify in Notion: the todo appears as a new page (linked, with `pb_id` filled)
-- Verify in Sync Activity: a new row with `op=Auto-applied`, `direction=PB→Notion`
+- Verify in Sync Activity: **no new row** (single-side new = no user action needed)
 
-**Test B — Notion → PB auto-apply:**
+**Test B — Notion → PB silent sync:**
 - In Notion, edit any todo's title (append `(edited)`)
 - Wait 5 seconds (so `last_edited_time` advances)
 - Force-run: `.venv/bin/python -m notion_sync.runner --force-now --only todos`
 - Verify in PB admin: the todo's title now ends with `(edited)`
-- Verify in Sync Activity: a new row with `op=Auto-applied`, `direction=Notion→PB`
+- Verify in Sync Activity: **no new row**
 
 **Test C — vanished detection (enqueue + idempotent):**
 - Pick a recently-created Notion todo and archive it via Notion's `…` → Delete from sidebar. Archived pages don't appear in `query_database`.
@@ -1365,9 +1354,9 @@ After completing all tasks, verify:
 - [ ] `python -m pytest tests/notion_sync/ -v` — all green (10 new changeset tests + 7 new guard tests + 41 existing PR1 tests = 58 total).
 - [ ] `systemctl is-active notion-sync.timer` returns `active` on the VM.
 - [ ] `.bridge_data/sync.log` exists and gets new lines after each `--force-now`.
-- [ ] At least one `op=Auto-applied` row appears in the Notion Sync Activity DB after Test A.
+- [ ] **No** `op=Auto-applied` rows appear in Sync Activity after Tests A/B (silent syncs).
 - [ ] One `op=Conflict` row and one `op=Delete?` row appear after Tests C and D (both `decision=Pending`).
-- [ ] Re-running --force-now doesn't duplicate the Conflict / Delete? rows (idempotent check).
+- [ ] Re-running --force-now doesn't duplicate the Conflict / Delete? rows (idempotent via `pending_action_exists`).
 - [ ] `sync_config[trips].last_sync_summary` has been written by the runner.
 - [ ] No phantom records — PB row count + Notion page count match PR1 end-state plus exactly the test edits.
 
