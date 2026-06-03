@@ -1,0 +1,16 @@
+[Unit]
+Description=Notion <-> PB sync runner (hourly check, runs only at configured local hour)
+After=network.target pocketbase.service
+
+[Service]
+Type=oneshot
+User=dev
+Group=dev
+WorkingDirectory=/home/dev/phone-bridge
+EnvironmentFile=/home/dev/phone-bridge/.env
+ExecStart=/home/dev/phone-bridge/.venv/bin/python -m notion_sync.runner
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

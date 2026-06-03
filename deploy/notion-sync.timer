@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly trigger for notion-sync.service
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=notion-sync.service
+
+[Install]
+WantedBy=timers.target
