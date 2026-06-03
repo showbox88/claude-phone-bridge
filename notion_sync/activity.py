@@ -40,25 +40,6 @@ def _url(href: str | None) -> dict:
     return {"url": href or None}
 
 
-def write_auto_applied(client, *, collection: str, direction: str,
-                       summary: str, pb_id: str, notion_id: str,
-                       record_link: str | None = None) -> dict:
-    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
-    return client.create_page(db_id, {
-        "title":        _title(f"{collection} · {direction} ({summary[:60]})"),
-        "op":           _select("Auto-applied"),
-        "direction":    _select(direction),
-        "collection":   _select(collection),
-        "record_link":  _url(record_link),
-        "pb_id":        _rich(pb_id),
-        "notion_id":    _rich(notion_id),
-        "summary":      _rich(summary),
-        "decision":     _select("N/A"),
-        "detected_at":  _date(_now_iso()),
-        "applied_at":   _date(_now_iso()),
-    })
-
-
 def write_conflict(client, *, collection: str, summary: str,
                    pb_id: str, notion_id: str,
                    pb_snapshot: dict, notion_snapshot: dict,
@@ -118,3 +99,25 @@ def write_delete_question(client, *, collection: str, summary: str,
         "decision":        _select("Pending"),
         "detected_at":     _date(_now_iso()),
     })
+
+
+def pending_action_exists(client, *, op: str, pb_id: str = "",
+                          notion_id: str = "") -> bool:
+    """True iff Sync Activity already has a Pending row for this
+    pb_id/notion_id/op combination. Used to make enqueue idempotent.
+
+    At least one of pb_id / notion_id should be non-empty.
+    """
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    clauses = [
+        {"property": "op",       "select": {"equals": op}},
+        {"property": "decision", "select": {"equals": "Pending"}},
+    ]
+    if pb_id:
+        clauses.append({"property": "pb_id",
+                        "rich_text": {"equals": pb_id}})
+    if notion_id:
+        clauses.append({"property": "notion_id",
+                        "rich_text": {"equals": notion_id}})
+    rows = client.query_database(db_id, filter_={"and": clauses}, page_size=1)
+    return len(rows) > 0
