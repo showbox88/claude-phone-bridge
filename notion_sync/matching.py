@@ -49,6 +49,19 @@ def bigram_jaccard(a: str, b: str) -> float:
     return len(ba & bb) / len(ba | bb)
 
 
+def _normalize_date(s: Any) -> str:
+    """Reduce a date or datetime string to YYYY-MM-DD for comparison.
+
+    Notion returns dates as ``'2026-05-31'`` while PB serializes the same
+    date as ``'2026-05-31 00:00:00.000Z'`` — naive equality treats them as
+    different, missing real matches. Stripping the time portion makes them
+    comparable.
+    """
+    if not s:
+        return ""
+    return str(s).split(" ")[0].split("T")[0]
+
+
 def best_match(target: dict, candidates: list[dict], *,
                title_key: str,
                date_key: str = "",
@@ -57,14 +70,14 @@ def best_match(target: dict, candidates: list[dict], *,
         return None
 
     target_title = str(target.get(title_key) or "")
-    target_date = str(target.get(date_key) or "") if date_key else ""
+    target_date = _normalize_date(target.get(date_key, "")) if date_key else ""
 
     best: Match | None = None
     for c in candidates:
         title_score = bigram_jaccard(target_title, str(c.get(title_key) or ""))
         score = title_score
         if date_key:
-            c_date = str(c.get(date_key) or "")
+            c_date = _normalize_date(c.get(date_key, ""))
             if target_date and c_date:
                 if target_date == c_date:
                     score = min(1.0, score + 0.1)
