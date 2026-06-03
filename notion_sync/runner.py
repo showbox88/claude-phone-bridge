@@ -222,10 +222,10 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
         nc, collection=collection,
     )
 
+    # Counts are tallied AFTER the freeze check so frozen rows don't
+    # inflate applied/conflict/delete counts in the log.
     counts: dict[str, int] = {}
     skipped_frozen = 0
-    for a in actions:
-        counts[type(a).__name__] = counts.get(type(a).__name__, 0) + 1
 
     for a in actions:
         try:
@@ -233,6 +233,7 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
             if (pid and pid in frozen_pb_ids) or (nid and nid in frozen_notion_ids):
                 skipped_frozen += 1
                 continue
+            counts[type(a).__name__] = counts.get(type(a).__name__, 0) + 1
             if isinstance(a, NoChange):
                 continue
             elif isinstance(a, PbOnlyChange):
