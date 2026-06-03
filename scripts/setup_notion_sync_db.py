@@ -25,7 +25,13 @@ from notion_sync.pb_api import PBClient
 
 
 # Notion DB ID for each sync-target PB collection.
-# Copied from pocketbase/migrate_notion.py's DBS list (only the 6 we sync).
+#
+# **NOT THE SOURCE OF TRUTH** — the canonical, up-to-date sync target list is
+# in `sync_config` rows in PocketBase AND in docs/data-model.md §10. This dict
+# is only consulted by the one-shot bootstrap below (which has already run for
+# the production workspace). The two trailing entries (stops + journal) were
+# added 2026-06-03 via the stops redesign so a fresh-workspace re-run still
+# bootstraps all 8 targets.
 SYNC_TARGETS: dict[str, str] = {
     "trips":     "df7ea062-7b18-4c4f-98f1-bfec8258c3db",
     "days":      "13329dea-4f55-4fc8-8e64-6c1ff19353bb",
@@ -33,6 +39,9 @@ SYNC_TARGETS: dict[str, str] = {
     "todos":     "5d4e3f93-cf13-4707-97c5-59b38940baac",
     "contacts":  "e304a6c3-4771-4c69-9ffc-97a672a1ac0c",
     "locations": "257c34c1-ac50-455d-9c8a-8d810de5c1e5",
+    # Added 2026-06-03 via stops redesign:
+    "stops":     "15bb0429-a026-48b4-96f8-4447d5060ee3",
+    "journal":   "ccc3b239-682d-47a1-a20e-e33b3c8fae44",
 }
 
 

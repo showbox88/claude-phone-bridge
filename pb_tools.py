@@ -406,7 +406,7 @@ async def smartnote_open_context(args: dict[str, Any]) -> dict[str, Any]:  # noq
         "type": "object",
         "properties": {
             "collection": {"type": "string",
-                           "description": "Restrict to one of trips/days/plans/todos/contacts/locations"},
+                           "description": "Restrict to one of trips/days/stops/plans/todos/contacts/locations/journal"},
         },
     },
 )
@@ -592,7 +592,7 @@ PROMPT_HINT = (
     "pb_delete_collection) require user approval, so only reach for them when "
     "asked. Call pb_list_collections at the start so you use the right "
     "collection names and exact select values.\n\n"
-    "For the Notion ↔ PB sync (trips/days/plans/todos/contacts/locations): "
+    "For the Notion ↔ PB sync (trips/days/stops/plans/todos/contacts/locations/journal): "
     "sync_queue_status shows Pending items the user needs to decide on; "
     "sync_now triggers an immediate sync (use when user says '同步一下'); "
     "sync_pause / sync_resume toggle sync_global.paused. Daily sync still "

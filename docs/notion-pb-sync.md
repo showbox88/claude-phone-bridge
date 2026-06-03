@@ -8,12 +8,12 @@ This document describes the bi-directional sync between **PocketBase** (Phone Br
 
 | | |
 |---|---|
-| **What** | Daily background sync between 6 PB collections and 6 Notion databases. |
+| **What** | Daily background sync between 8 PB collections and their Notion mirror databases. |
 | **Direction** | Bi-directional. Single-side changes auto-flow; both-side changes freeze and ask. |
 | **Trigger** | systemd timer every hour; Python guard runs the actual sync only at the configured local hour (default 03:00 America/New_York). |
 | **User UI** | Notion's "Sync Activity" database = the pending-decision queue. Phone Bridge auto-creates a chat session when there's something to decide. |
 | **Authority** | PB is the system of record. Notion is the editing surface. Neither is "the master" — conflicts are user-resolved. |
-| **Scope** | trips · days · plans · todos · contacts · locations (6 of PB's 28 collections). |
+| **Scope** | trips · days · **stops** · plans · todos · contacts · locations · **journal** (8 of PB's 28 collections; stops + journal added 2026-06-03 via the stops redesign — see [docs/data-model.md](data-model.md) for the canonical schema). |
 
 ---
 
