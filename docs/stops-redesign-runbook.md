@@ -138,15 +138,27 @@ deletes the duplicate day rows. Already-migrated rows are skipped by
 
 ## Phase 3 — Drop legacy days fields
 
-Migration `1779465621_drop_legacy_days_fields.js` is in the repo. **It
-refuses to apply if any legacy day row hasn't been migrated** (safety check
-inside the migration). So if Phase 2 wasn't run on the prod DB, the deploy
-fails loud — not silent data loss.
+Migration `1779465621_drop_legacy_days_fields.js.pending` is in the repo
+with a **`.pending` suffix** so PB ignores it. This is deliberate — Phase 1
+deploy ran migrations 18–20 (additive only); we do NOT want Phase 3 to
+auto-run before Phase 2's data migration script has completed.
+
+**When ready for Phase 3 (after Phase 2 dry-run + real-run + duplicate
+review + `--apply-delete`), rename + redeploy:**
 
 ```bash
 # Local Windows shell:
+git mv pocketbase/pb_migrations/1779465621_drop_legacy_days_fields.js.pending \
+       pocketbase/pb_migrations/1779465621_drop_legacy_days_fields.js
+git commit -m "Enable Phase 3 migration after Phase 2 data migration"
+git push
 deploy
 ```
+
+The migration itself has a runtime safety check (`findRecordsByFilter` for
+any row with `activity_type` set + empty `migrated_to_stop_id`) — if Phase 2
+somehow wasn't run, the migration throws transactionally and PB rolls back
+to migration 20 cleanly. No silent data loss.
 
 Verify:
 

@@ -79,6 +79,21 @@ migration are written and committed; deploy + data migration is operator-driven
 per the runbook. Relation sync is explicitly out of scope this round — tracked
 as a future PR.
 
+**Phase 3 migration is gated by a `.pending` suffix** to prevent it from
+auto-running before Phase 2 data migration completes. To enable it, rename
+`pocketbase/pb_migrations/1779465621_drop_legacy_days_fields.js.pending` →
+`.js` and redeploy.
+
+## Data model reference (for sync agents)
+
+**[docs/data-model.md](docs/data-model.md)** is the field-by-field reference
+for all 8 synced PB collections + their Notion DBs, the codec rules
+(snake↔Title, type envelopes), pipeline fields, Sync Activity structure,
+known limitations (notably: relations are NOT bidirectionally synced today),
+and common operations for agents (add a sync target, debug a stuck row,
+add a category to stops, etc.). Read this before touching anything in
+`notion_sync/`.
+
 Quick reference (the rest of this section is the operational TL;DR — for
 anything deeper, read the doc):
 
