@@ -611,8 +611,13 @@ def notify_pending(nc: NotionClient) -> int:
         # the phone-bridge db module isn't on sys.path.
         import sys as _sys
         from pathlib import Path as _Path
-        _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+        repo_root = _Path(__file__).resolve().parents[1]
+        _sys.path.insert(0, str(repo_root))
         import db  # type: ignore
+        # The bridge sqlite path matches server.py's wiring.
+        db_root = _Path(os.environ.get("BRIDGE_DATA_DIR",
+                                        str(repo_root / ".bridge_data")))
+        db.init(db_root / "bridge.db")
         sid = db.create_session(
             cwd=os.environ.get("DEFAULT_CWD", "/home/dev"),
             title=title[:80], mode="chat", model="",
