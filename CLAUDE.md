@@ -61,39 +61,56 @@ ssh dashboard-server 'systemctl status phone-bridge'
 - Don't change `DEFAULT_CWD` to a path Claude shouldn't have access to —
   Claude can spawn shell commands within `cwd` and below.
 
-## Notion sync (PR1 baseline)
+## Notion sync
 
-PR1 wires up the schema and the initial data alignment between PB and Notion
-for 6 collections (trips/days/plans/todos/contacts/locations). Cron-driven
-sync lands in PR2; this section covers manual operations only.
+PR1 wired the schema and the initial PB ↔ Notion alignment for 6 collections
+(trips/days/plans/todos/contacts/locations). PR2 added the daily auto-sync
+runner. PR3 (not done) will add the Sync Activity decision applier and push
+notifications.
 
-**Sync metadata:**
-- PB collections `sync_config` (per-collection) and `sync_global` (timezone,
-  sync hour, paused) — created by migration `1779465616_create_sync_meta.js`
-- Pipeline fields on each synced PB collection: `notion_id`,
-  `notion_last_edited`, `last_synced_at` — added by migration
-  `1779465617_add_sync_pipeline_fields.js`
-- Pipeline columns on each Notion DB: `pb_id`, `last_synced_at` — added by
-  `scripts/setup_notion_sync_db.py`
-- Notion DB "Sync Activity" — created by `setup_notion_sync_db.py`, id stored
-  in `.env` as `NOTION_SYNC_ACTIVITY_DB_ID`
+**Daily operation:**
+- systemd timer `notion-sync.timer` fires hourly.
+- The runner reads `sync_global.timezone` + `sync_hour_local` and exits
+  silently unless the current hour in that timezone equals the configured
+  sync hour.
+- When it does run: for each enabled `sync_config` row it categorizes
+  rows into changed-one-side / changed-both / new / vanished. **Single-side
+  changes and new rows are synced silently** — Sync Activity is not
+  touched (the data itself is the visible result).
+- **Conflicts (both sides changed) and deletes (one side vanished) are
+  enqueued to Sync Activity with `decision=Pending`** so you can review
+  snapshots in Notion and pick a winner. Re-detected conflicts/deletes
+  don't duplicate-write (idempotent via `pending_action_exists`).
+- PR2 does **not** auto-apply user decisions yet — that lands in PR3. You
+  can still mark decisions in Notion; PR3 will pick them up on first run.
+- `sync_config[*].last_sync_summary` reflects the latest pass.
 
-**Re-running reconcile:**
-
+**Force a run now:**
 ```bash
 ssh dashboard-server
 cd /home/dev/phone-bridge
+set -a; . ./.env; set +a
+.venv/bin/python -m notion_sync.runner --force-now              # all enabled
+.venv/bin/python -m notion_sync.runner --force-now --only trips # one table
+```
+
+**Pause:** set `sync_global.paused = true` via PB admin or REST. The next
+hourly tick logs `skipped_paused` and exits without touching anything.
+
+**Logs:**
+- operational events JSON lines: `/home/dev/phone-bridge/.bridge_data/sync.log`
+  (run_start, run_end, apply_error, skipped_paused, bad_timezone)
+- conflicts/deletes: NOT in the log file — go to Notion Sync Activity DB
+- systemd journal: `journalctl -u notion-sync.service -f`
+
+**Change the schedule / timezone:** update `sync_global` in PB. Takes
+effect at the next hourly tick — no systemctl reload needed.
+
+**Re-running initial reconcile** (still available):
+```bash
 .venv/bin/python scripts/reconcile_initial.py --only <collection> --dry-run
 .venv/bin/python scripts/reconcile_initial.py --only <collection>
 ```
-
-The script backs up PB to `.bridge_data/backups/<ts>/` before any write, so
-partial failures are recoverable.
-
-**Reviewing duplicates:** open the Sync Activity Notion DB → filter for
-`op=Possible duplicate` and `decision=Pending` → for each row, look at the
-two snapshots and set `decision` to `Use Notion` / `Use PB` / `Keep both`.
-PR3 will auto-apply these; for PR1 the choice is just recorded.
 
 ## Architecture
 
