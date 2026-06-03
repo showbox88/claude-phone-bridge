@@ -21,11 +21,16 @@ phone-bridge/
 ├── db.py                 # SQLite 会话 / 消息 / 用量持久化
 ├── auth.py               # bcrypt 密码 + TOTP + 设备 cookie
 ├── push.py               # Web Push 推送封装
+├── pb_tools.py           # in-process MCP server (pb_* + sync_* 工具)
 ├── static/               # PWA 前端（HTML/JS/CSS/SW/icons）
 ├── pocketbase/           # Smart Note 后端（migrations + hooks，详见 pocketbase/README.md）
 ├── mcp_pb/               # MCP server, 让 claude.ai 云端读写 PocketBase
+├── notion_sync/          # PB ↔ Notion 双向同步运行库（runner + codec + 决策应用器）
+├── scripts/              # 一次性脚本：setup_notion_sync_db.py / reconcile_initial.py / migrate_days_to_stops.py
+├── deploy/               # systemd units: notion-sync.{service,timer} + install_systemd.sh
+├── docs/                 # 架构文档（data-model.md = 真相源；notion-pb-sync.md = sync 运维）
 ├── CHECKIN.md            # 打卡功能的协议规则（Claude 看这个写 PB）
-├── PHASE2_PLAN.md        # 打卡 Phase 2 实施计划
+├── PHASE2_PLAN.md        # 打卡 Phase 2 实施计划（历史）
 ├── CLAUDE.md             # 给在这个仓库工作的 Claude 看的运维笔记
 └── CHANGELOG.md          # 历史变更记录
 ```
@@ -173,6 +178,18 @@ Code 会话和 Chat 会话在 drawer 里分开维护，互不干扰。
 - 后端 schema 和部署：[`pocketbase/README.md`](./pocketbase/README.md)
 - Phase 2 计划：[`PHASE2_PLAN.md`](./PHASE2_PLAN.md)
 - claude.ai 云端读写 PB：[`mcp_pb/README.md`](./mcp_pb/README.md)
+
+## Notion 双向同步（2026-06 上线）
+
+PocketBase 是真相源；Notion 作为"编辑面板"双向同步 8 张表（trips / days / stops / plans / todos / contacts / locations / journal）。
+
+- **触发**：systemd timer `notion-sync.timer` 每小时检查，仅在配置时区的 03:00 真跑（默认 America/New_York）
+- **单边变更 + 新建**：静默同步，不打扰你
+- **双边都改了 / 一边消失了**：写一条 Notion **Sync Activity** DB（`decision=Pending`），冻结这一行;Phone Bridge 自动创建一个 chat session 「📋 同步待确认 N 项」放到 sidebar 顶部
+- **你设决定**：在 Notion Sync Activity DB 把 `decision` 改成 `Use Notion / Use PB / Delete both / Keep both`，下次 cron 自动执行
+- **MCP 工具**：phone bridge chat 里可以让 Claude 调 `sync_now / sync_queue_status / sync_pause / sync_resume`
+
+完整架构、数据流、运维 cookbook 在 [`docs/notion-pb-sync.md`](./docs/notion-pb-sync.md);schema/字段映射的真相源在 [`docs/data-model.md`](./docs/data-model.md)。
 
 ## 安全提醒
 

@@ -68,21 +68,22 @@ tools, in-app chat-session alerts, 90-day cleanup. See
 **[docs/notion-pb-sync.md](docs/notion-pb-sync.md)** for the full
 architecture / data model / flow / runbook.
 
-## Trip data model: stops redesign (in-flight)
+## Trip data model: stops redesign (shipped 2026-06-03)
 
-`days` is being split into a pure container (`days`) + atomic events (`stops`)
-so a real travel day can hold many events. See
+`days` was split into a pure container (`days`) + atomic events (`stops`)
+so a real travel day can hold many events. All five phases of the migration
+have been executed; see
 **[docs/superpowers/specs/2026-06-03-stops-redesign-design.md](docs/superpowers/specs/2026-06-03-stops-redesign-design.md)**
-for architecture and **[docs/stops-redesign-runbook.md](docs/stops-redesign-runbook.md)**
-for the 5-phase migration runbook. Phase 1 migrations + Phase 2 script + Phase 3
-migration are written and committed; deploy + data migration is operator-driven
-per the runbook. Relation sync is explicitly out of scope this round — tracked
-as a future PR.
+for the architecture, **[docs/stops-redesign-runbook.md](docs/stops-redesign-runbook.md)**
+for the historical 5-phase migration runbook, and
+**[docs/data-model.md](docs/data-model.md)** for the as-built schema (the
+canonical reference going forward).
 
-**Phase 3 migration is gated by a `.pending` suffix** to prevent it from
-auto-running before Phase 2 data migration completes. To enable it, rename
-`pocketbase/pb_migrations/1779465621_drop_legacy_days_fields.js.pending` →
-`.js` and redeploy.
+Key consequence: `days` no longer holds `reserved / checkin / amount /
+currency / rate / amount_usd / activity_type / score / location /
+actual_lat / actual_lng` — all those fields live on `stops` now. Writes
+that previously went to `days` need to upsert a `days` container + create
+a `stops` row underneath. See `CHECKIN.md` for the updated protocol.
 
 ## Data model reference (for sync agents)
 
@@ -110,8 +111,10 @@ anything deeper, read the doc):
   enqueued to Sync Activity with `decision=Pending`** so you can review
   snapshots in Notion and pick a winner. Re-detected conflicts/deletes
   don't duplicate-write (idempotent via `pending_action_exists`).
-- PR2 does **not** auto-apply user decisions yet — that lands in PR3. You
-  can still mark decisions in Notion; PR3 will pick them up on first run.
+- User decisions on Pending rows (set in Notion) are applied automatically
+  on the next runner pass via `apply_pending_decisions()`; the row's
+  `applied_at` field then stamps when it ran. Supported decisions:
+  `Use Notion` / `Use PB` / `Delete both` / `Keep both`.
 - `sync_config[*].last_sync_summary` reflects the latest pass.
 
 **Force a run now:**

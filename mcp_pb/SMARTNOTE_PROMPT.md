@@ -24,10 +24,16 @@ PocketBase 表：`claude_memos`
 - `daily_briefing`  — routine 自动生成的早/中/晚简报
 - `pages`           — 长篇独立笔记 / 个人 profile / 路线图
 
-辅助 6 张（涉及时再用，schema 见 `pb_list_collections`）：
-- `locations`, `trips`, `days`, `foods` — 行程·地点·消费子系统
+辅助 7 张（涉及时再用，schema 见 `pb_list_collections`）：
+- `locations`, `trips`, `days`, `stops`, `foods` — 行程·地点·消费子系统
 - `contacts`       — 联系人
 - `transactions`   — 信用卡消费
+
+> **2026-06-03 stops redesign**：`days` 不再存"事件信息"（金额、评分、
+> 类型、坐标、checkin 时间），只剩日级容器字段（name / date / weather /
+> note）。所有"今天买了一杯咖啡、今天吃了拉面、今天打车去了机场"这种
+> 原子事件都写到 `stops` 表，并用 `stop.day` 反向挂到当天的 day 上。
+> 详见 [`docs/data-model.md`](../docs/data-model.md)。
 
 **首次对话或不确定字段时调 `pb_list_collections()` 取实时 schema**——所有 select 字段的当前合法值都在返回里，**不要硬背**。
 
@@ -73,9 +79,10 @@ PocketBase 表：`claude_memos`
   tags (multi, maxSelect=5): 工作 / 家人 / 学习 / 灵感 / 重要
 
 `journal`:
-  type: Learning | Feeling | Observation | Event | Diary
+  type: Learning | Feeling | Observation | Event | Diary | Reminder
   mood: Happy | Sad | Anxious | Excited | Calm | Frustrated | Grateful | Reflective | Energized
   tags (multi, maxSelect=5): 工作 / 家人 / 学习 / 读书 / 生活
+  related_trip → trips.id   |   related_day → days.id   |   related_stop → stops.id
 
 `plans`:
   status: Active | Paused | Done | Abandoned
@@ -142,7 +149,7 @@ PocketBase 字段名**全小写 + 下划线**：
 - 将来接入 Calendar 后，创建带提醒的 todo 时：先 `pb_create('todos', {executor:'gcal', executor_ref_id:''})`，再调 Calendar 工具创建事件，最后 `pb_update('todos', <id>, {executor_ref_id:'<event_id>'})` 回填
 - 状态回流：Ryan 告诉你做完某事时，必须同时更新 PocketBase 和对应 specialty app（如适用）
 - 任何 specialty app 临时挂了，PocketBase 数据仍然完整，继续工作不阻塞
-- Notion 库已降级为只读归档，**不要再调用 Notion 工具写入**——但用 Notion MCP `search/fetch` 找历史数据 OK
+- Notion 是用户的"编辑面板"，由 `notion_sync.runner`（dashboard-server 上 03:00 ET 自动跑）和 PocketBase 双向同步 8 张表（trips/days/stops/plans/todos/contacts/locations/journal）。你（claude.ai）**不要直接调 Notion 工具写入**——所有写入走 PB，runner 当晚同步过去。用 Notion MCP `search/fetch` 找历史/参考数据是 OK 的。
 
 【Gmail 数据源接入（输入侧）】
 

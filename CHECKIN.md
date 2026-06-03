@@ -82,19 +82,51 @@ curl -sS -H "Authorization: $PB_TOKEN" "$PB_URL/api/collections/trips/records?fi
 
 ---
 
-### Step 3：创建 Day 记录
+### Step 3：upsert Day（容器）+ 新建 Stop（事件）
+
+> **重要**：2026-06-03 stops redesign 之后，`days` 表只剩"日级"容器字段
+> （name / date / weather / note / content / trip）。打卡的所有"事件
+> 信息"（金额、评分、类型、坐标、checkin 时间）都搬到了 `stops`。
+> 一个真实的日历日 = 1 个 day 行 + N 个 stop 行。
+
+**3a. Upsert Day（找今天的容器；没有就建一个）**
 
 ```bash
-curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json"   "$PB_URL/api/collections/days/records"   -d '{
-    "name": "<打卡描述，默认用 location.name 或 activity_type>",
+TODAY=$(date +%Y-%m-%d)
+DAY_ID=$(curl -sS -G -H "Authorization: $PB_TOKEN" \
+  --data-urlencode "filter=(trip='$TRIP_ID' && date='$TODAY')" \
+  --data-urlencode "perPage=1" \
+  "$PB_URL/api/collections/days/records" | jq -r '.items[0].id // empty')
+
+if [ -z "$DAY_ID" ]; then
+  DAY_ID=$(curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json" \
+    "$PB_URL/api/collections/days/records" \
+    -d '{
+      "name": "<行程名 Day N 或 location.city + 日期>",
+      "date": "<YYYY-MM-DD>",
+      "trip": "<trip_id 或空字符串>"
+    }' | jq -r '.id')
+fi
+```
+
+- 同一行程的同一天只该有一个 Day 行；filter 先查再建避免重复
+- 散落打卡（trip 空）：filter 改为 `date='$TODAY' && trip=''`
+
+**3b. 创建 Stop（具体事件）**
+
+```bash
+curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json" \
+  "$PB_URL/api/collections/stops/records" \
+  -d '{
+    "name": "<事件描述，默认用 location.name 或 activity 标签>",
     "date": "<YYYY-MM-DD>",
     "checkin": "<when 完整 ISO-8601 时间戳>",
+    "categories": ["<打卡|酒店|餐厅|购物|体验|交通|笔记|消费 中的一个或多个>"],
     "amount": <数字或省略>,
-    "currency": "<CNY/USD/JPY/EUR/其他 或 null>",
+    "currency": "<JPY|EUR|USD|CNY|其他 或省略>",
     "rate": <数字或省略>,
-    "activity_type": "<景点观光/爬山徒步/用餐/购物/休息/交通/娱乐/其他>",
-    "score": <0-10 数字或 null>,
     "note": "<短评>",
+    "day": "<day_id from 3a>",
     "trip": "<trip_id 或空字符串>",
     "location": "<location_id 或空字符串>",
     "actual_lat": <gps[0]>,
@@ -102,7 +134,14 @@ curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/jso
   }'
 ```
 
-- `amount_usd` 不用你算——pb_hooks/days.pb.js 会自动 `amount * rate`
+**字段映射**：旧 YAML 的 `activity_type` 现在翻成 `categories` 数组里的一
+个或多个值；用餐 → `["餐厅", "消费"]`，纯逛景点 → `["打卡"]`，住酒店
+→ `["酒店", "消费"]`。旧 `score`（0-10 数字）不再存在 stop 上，转写到
+Step 4 的 location.rating（已经是这个流程）。
+
+- `amount_usd`：stops 表的 `amount_usd` 字段，目前是给前端 derived 用的；
+  你 POST 时可以不传，或者算好传上去（`amount * rate`），二者都行
+- `categories` 是 multi-select，至少给一个值
 - 字段省略时不要写 `null` 字符串（PB 会当文字"null"）——直接 omit key
 
 ---
@@ -132,7 +171,7 @@ curl -sS -X PATCH -H "Authorization: $PB_TOKEN" -H "Content-Type: application/js
 成功：
 ```
 ✅ 打卡 📍 <店名>
-   Day #<day_id> · <activity_type> · ¥38 · ⭐⭐⭐⭐
+   Day《<day_name>》· Stop <categories[0]> · ¥38 · ⭐⭐⭐⭐
    {若有} 关联 Trip《<trip_title>》
 ```
 
@@ -146,9 +185,9 @@ curl -sS -X PATCH -H "Authorization: $PB_TOKEN" -H "Content-Type: application/js
 
 ## 四、底线规则
 
-1. **不写 Notion**：Notion 是只读归档，由独立 sync job 处理。打卡完全本地。
-2. **不动 Foods / Journal**：除非用户在同一消息里明确要记菜或日记，否则只动 trips / locations / days。
-3. **"买水" 模式**：build_location: false 时绝不创建 Location。直接写 Day（location 字段空）。
+1. **不写 Notion**：Notion 由独立 sync job（`notion_sync.runner`，每天 03:00 ET 自动跑）处理双向同步。打卡完全本地。
+2. **不动 Foods / Journal**：除非用户在同一消息里明确要记菜或日记，否则只动 trips / locations / days / **stops**。
+3. **"买水" 模式**：build_location: false 时绝不创建 Location。直接写 Stop（location 字段空），day 仍然要 upsert（散落到 trip='' && date='today' 的 day 上）。
 4. **不重试 401**：token 失效就报告给用户。server.py 后台 refresh 周期 30 分钟，下次自然恢复。
 5. **必填字段缺失**：name 字段缺失时用 location.name 或 activity_type 兜底，永远不要 POST 一个没有 name 的 Day。
 6. **`$PB_URL` 和 `$PB_TOKEN` 是 env 变量**：直接在 bash 命令里用 `$VAR` 引用，**不要硬编码 URL 或 token 字符串**。

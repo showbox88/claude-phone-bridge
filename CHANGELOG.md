@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-06 — Trip 数据模型 stops redesign
+
+- **背景**：原本 `days` 既是"日级容器"又是"事件记录"——一个真实日历日里发生 N 件事（吃饭、打车、买票、住宿），就得建 N 条 day 行，时间维度被压扁。Notion 和 PB 都不舒服。
+- **改动**：把 `days` 切成两层——`days` 退化为纯容器（name / date / weather / note / content / trip），新增 `stops` 表承载原子事件（categories / amount / currency / rate / checkin / location / contact / journal 关联 + 双向 day&trip 关系）。一个 day 行下挂 N 个 stop。
+- **`journal` 同步扩展**：加 `related_stop` 字段、`type` 多加 `Reminder` 选项、并补齐 sync 管线字段（`notion_id` / `notion_last_edited` / `last_synced_at`），加入双向同步阵营。
+- **Migrations**：18 (`create_stops`) + 19 (`extend_days_for_stops_migration`) + 20 (`extend_journal_for_stops`) + 21 (`drop_legacy_days_fields`) + 数据迁移脚本 `scripts/migrate_days_to_stops.py`（按既有 days 行重组成 day-container + stop-event）。
+- **5 阶段 runbook**：详见 [`docs/stops-redesign-runbook.md`](./docs/stops-redesign-runbook.md)；最终 schema 真相源在 [`docs/data-model.md`](./docs/data-model.md)。
+- **影响下游**：打卡协议 ([`CHECKIN.md`](./CHECKIN.md)) Step 3 重写——先 upsert day 再建 stop。`notion_sync.runner` 已经认识 stops + journal 两个新 sync target。
+
+## 2026-06 — Notion ↔ PocketBase 双向同步（PR1 + PR2 + PR3）
+
+- **目标**：让 PocketBase（真相源）和 Notion（移动端可编辑的"驾驶舱"）保持一致;用户在 Notion 直观浏览/编辑，Claude 在 PB 写入,夜里自动汇流。
+- **PR1（schema + 初次对齐）**：给 6 张同步表加 pipeline 字段（`notion_id` / `notion_last_edited` / `last_synced_at`）；新建 `sync_config`（per-collection 配置）+ `sync_global`（时区/小时/暂停）PB 表；在 Notion 建 "Sync Activity" DB 作裁决队列;`scripts/reconcile_initial.py` 跑一次性数据对齐(模糊匹配 + 反向回填 `pb_id`)。
+- **PR2（每日 cron + 冻结机制）**：`notion_sync.runner` 跑 systemd hourly，Python 守门只在配置时区的 03:00 真跑。`changeset.py` 纯函数分类(NoChange / *Change / *New / *Vanished)。单边变更/新建静默同步;双边都改了 → 写 Sync Activity (Conflict, Pending),冻结这一对 ID，直到用户裁决。Sync Activity 也镜像 Delete? 场景。
+- **PR3（决定应用器 + 通知 + MCP + 清理）**：`apply_pending_decisions()` 每次 cron 跑前扫 Sync Activity,执行用户设的 `Use Notion` / `Use PB` / `Delete both` / `Keep both`，标 `applied_at`。`notify_pending()` 跟周报一样自动建一个 chat session "📋 同步待确认 N 项" 推到 Phone Bridge sidebar。4 个 MCP 工具：`sync_now / sync_queue_status / sync_pause / sync_resume`。`cleanup_resolved_activity(days=90)` 归档过期 Sync Activity 行。
+- **范围**：6 → 8 张表（stops redesign 之后又加 stops + journal）。共 ~3000 行代码 + 58 个测试。
+- **已知限制**：relation 字段不参与同步（PB 用 PB 记录 ID，Notion 用 Notion page UUID，ID 空间不互通，详见 [`docs/notion-pb-sync.md`](./docs/notion-pb-sync.md#limitations--known-holes)）。
+- **完整架构 + 运维 cookbook**：[`docs/notion-pb-sync.md`](./docs/notion-pb-sync.md);schema 真相源 [`docs/data-model.md`](./docs/data-model.md)。
+
 ## 2026-06 — phone-bridge 直接用 PocketBase 工具 (`mcp__pb__*`)
 
 - **背景**：之前本机/手机的 Claude SDK 会话读写 PocketBase 只能靠 Bash + curl
