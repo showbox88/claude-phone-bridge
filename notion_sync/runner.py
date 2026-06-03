@@ -525,8 +525,61 @@ def main() -> int:
             "last_run_at": now_iso_datetime(),
         })
 
+    # Notify the user if there are Pending Sync Activity rows that need
+    # their attention. Best-effort: failure to import push or send
+    # doesn't break the run.
+    try:
+        pending_count = notify_pending(nc)
+        overall["pending"] = pending_count
+    except Exception as e:
+        log_event("notify_error", error=str(e),
+                  trace=traceback.format_exc()[:500])
+
     log_event("run_end", **overall)
     return 0
+
+
+def notify_pending(nc: NotionClient) -> int:
+    """Send a push notification if there are Pending Sync Activity rows.
+
+    Returns the Pending count regardless of whether a push was sent
+    (push silently skips when push module / VAPID key not configured).
+    """
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    rows = nc.query_database(db_id, filter_={"and": [
+        {"property": "decision", "select": {"equals": "Pending"}},
+        {"property": "applied_at", "date": {"is_empty": True}},
+    ]})
+    n = len(rows)
+    if n == 0:
+        return 0
+
+    # Build a short body listing up to 3 summaries.
+    summaries: list[str] = []
+    for r in rows[:3]:
+        p = r.get("properties", {})
+        op = (p.get("op", {}).get("select") or {}).get("name", "?")
+        summ = "".join(rt.get("plain_text", "")
+                        for rt in p.get("summary", {}).get("rich_text", []))
+        summaries.append(f"• {op} · {summ[:50]}")
+    if n > 3:
+        summaries.append(f"…还有 {n - 3} 项")
+
+    title = f"📋 同步待确认 {n} 项"
+    body = "\n".join(summaries)
+
+    try:
+        # Lazy import — keeps runner usable in environments where
+        # push (and its pywebpush dep) isn't installed.
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
+        import push  # type: ignore
+        push.send_to_all(title=title, body=body, tag="notion-sync-pending")
+        log_event("push_sent", pending=n)
+    except Exception as e:
+        log_event("push_skipped", reason=str(e), pending=n)
+    return n
 
 
 if __name__ == "__main__":
