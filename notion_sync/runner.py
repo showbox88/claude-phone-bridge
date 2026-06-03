@@ -572,53 +572,128 @@ def cleanup_resolved_activity(nc: NotionClient, *, days: int = 90) -> int:
     return archived
 
 
-def notify_pending(nc: NotionClient) -> int:
-    """Send a push notification if there are Pending Sync Activity rows.
+_ALERT_STATE_FILE = "sync_alert_state.json"
+_ALERT_DEDUPE_SECONDS = 6 * 3600   # 6 hours
 
-    Returns the Pending count regardless of whether a push was sent
-    (push silently skips when push module / VAPID key not configured).
+
+def notify_pending(nc: NotionClient) -> int:
+    """Create a Phone Bridge chat session listing Pending Sync Activity rows.
+
+    Same UX as the weekly report: the session appears in the sidebar so
+    the next time the user opens Phone Bridge they see it. Tap → talk
+    to Claude inline ("帮我看看这条冲突应该选哪个").
+
+    Dedupe: only create a new session if the last one was created more
+    than 6 hours ago OR the pending row-id set has changed since the
+    last alert. State lives in .bridge_data/sync_alert_state.json.
+
+    Returns the Pending count regardless of whether a session was made.
     """
     db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
     rows = nc.query_database(db_id, filter_={"and": [
-        {"property": "decision", "select": {"equals": "Pending"}},
-        {"property": "applied_at", "date": {"is_empty": True}},
+        {"property": "decision",   "select": {"equals": "Pending"}},
+        {"property": "applied_at", "date":   {"is_empty": True}},
     ]})
     n = len(rows)
     if n == 0:
         return 0
 
-    # Build a short body listing up to 3 summaries.
-    summaries: list[str] = []
-    for r in rows[:3]:
-        p = r.get("properties", {})
-        op = (p.get("op", {}).get("select") or {}).get("name", "?")
-        summ = "".join(rt.get("plain_text", "")
-                        for rt in p.get("summary", {}).get("rich_text", []))
-        summaries.append(f"• {op} · {summ[:50]}")
-    if n > 3:
-        summaries.append(f"…还有 {n - 3} 项")
-
-    title = f"📋 同步待确认 {n} 项"
-    body = "\n".join(summaries)
-
-    # VAPID key check up front — push.send_to_all silently no-ops when
-    # the private key is missing, which would make the "push_sent" log
-    # line a lie. Be explicit.
-    if not os.environ.get("VAPID_PRIVATE_KEY", "").strip():
-        log_event("push_skipped", reason="VAPID_PRIVATE_KEY not configured",
-                  pending=n)
+    current_ids = sorted(r["id"] for r in rows)
+    if _alert_already_sent(current_ids):
+        log_event("alert_skipped", reason="recent + same set", pending=n)
         return n
 
+    title = f"📋 同步待确认 {n} 项"
+    md = _render_pending_markdown(rows)
+
     try:
+        # Lazy imports — keep runner usable in environments where
+        # the phone-bridge db module isn't on sys.path.
         import sys as _sys
         from pathlib import Path as _Path
         _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
-        import push  # type: ignore
-        push.send_to_all(title=title, body=body, tag="notion-sync-pending")
-        log_event("push_sent", pending=n)
+        import db  # type: ignore
+        sid = db.create_session(
+            cwd=os.environ.get("DEFAULT_CWD", "/home/dev"),
+            title=title[:80], mode="chat", model="",
+        )
+        db.append_message(sid, "assistant_text", {"text": md})
+        log_event("alert_session_created", session_id=sid, pending=n)
+        _save_alert_state(current_ids)
     except Exception as e:
-        log_event("push_skipped", reason=str(e), pending=n)
+        log_event("alert_failed", reason=str(e), pending=n)
     return n
+
+
+def _render_pending_markdown(rows: list[dict]) -> str:
+    lines: list[str] = []
+    lines.append(f"## 📋 同步待确认 {len(rows)} 项")
+    lines.append("")
+    lines.append("以下条目两边数据不一致(或一边消失了),需要你裁决:")
+    lines.append("")
+    by_op: dict[str, list[dict]] = {}
+    for r in rows:
+        p = r.get("properties", {})
+        op = (p.get("op", {}).get("select") or {}).get("name", "?")
+        by_op.setdefault(op, []).append(r)
+    op_label = {
+        "Conflict":           "🔀 冲突(两边都改了同一字段)",
+        "Delete?":            "🗑️ 删除?(一边的记录消失了)",
+        "Possible duplicate": "👯 可能重复(初次对齐发现)",
+        "Schema mismatch":    "🧬 字段对不上",
+    }
+    for op, items in by_op.items():
+        lines.append(f"### {op_label.get(op, op)} — {len(items)} 项")
+        lines.append("")
+        for r in items:
+            p = r.get("properties", {})
+            coll = (p.get("collection", {}).get("select") or {}).get("name", "?")
+            summ = "".join(rt.get("plain_text", "")
+                            for rt in p.get("summary", {}).get("rich_text", []))
+            link = r.get("url") or ""
+            lines.append(f"- **{coll}** · {summ}")
+            if link:
+                lines.append(f"  - [打开 Sync Activity 那一行]({link})")
+        lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("**怎么处理:** 打开 Sync Activity DB(用上面任意链接),把每行的 "
+                  "`Decision` 改成 `Use Notion` / `Use PB` / `Delete both` / `Keep both`。"
+                  "下一次同步(每天 03:00 ET,或叫 Claude `同步一下`)会自动执行你的选择。")
+    return "\n".join(lines)
+
+
+def _alert_state_path() -> str:
+    root = os.environ.get("BRIDGE_DATA_DIR", ".bridge_data")
+    return os.path.join(root, _ALERT_STATE_FILE)
+
+
+def _alert_already_sent(current_ids: list[str]) -> bool:
+    try:
+        with open(_alert_state_path(), encoding="utf-8") as f:
+            state = _json.load(f)
+    except (OSError, ValueError):
+        return False
+    last_ts = float(state.get("last_alert_ts") or 0)
+    last_ids = state.get("last_pending_ids") or []
+    now = datetime.now(timezone.utc).timestamp()
+    same_set = list(current_ids) == list(last_ids)
+    fresh = (now - last_ts) < _ALERT_DEDUPE_SECONDS
+    return fresh and same_set
+
+
+def _save_alert_state(current_ids: list[str]) -> None:
+    state = {
+        "last_alert_ts":     datetime.now(timezone.utc).timestamp(),
+        "last_pending_ids":  list(current_ids),
+    }
+    path = _alert_state_path()
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(state, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":
