@@ -20,7 +20,9 @@ def backup_collections(pb, root: Path) -> Path:
     for c in pb.list_collections():
         if c.get("type") != "base":
             continue
-        rows = pb.list_records(c["name"])
+        # sort="" — some user collections lack a `created` field; explicit
+        # empty sort keeps backup tolerant of any schema.
+        rows = pb.list_records(c["name"], sort="")
         path = out_dir / f"{c['name']}.json"
         path.write_text(json.dumps(rows, ensure_ascii=False, indent=2),
                         encoding="utf-8")

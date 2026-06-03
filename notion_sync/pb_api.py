@@ -58,8 +58,9 @@ class PBClient:
         out: list[dict] = []
         page = 1
         while True:
-            params = [f"page={page}", f"perPage={per_page}",
-                      f"sort={urllib.parse.quote(sort, safe=',-')}"]
+            params = [f"page={page}", f"perPage={per_page}"]
+            if sort:
+                params.append("sort=" + urllib.parse.quote(sort, safe=",-"))
             if filter:
                 params.append("filter=" + urllib.parse.quote(filter, safe=""))
             data = self._http("GET",
