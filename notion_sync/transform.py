@@ -1,4 +1,13 @@
-"""PB ↔ Notion row-level transforms — shared by reconcile_initial and runner."""
+"""PB ↔ Notion row-level transforms — shared by reconcile_initial and runner.
+
+PR2 limitation: relation fields are NOT translated between sides. Notion
+stores its own page UUIDs as relation targets; PB stores its own record
+IDs. The two ID spaces don't match, so blindly copying a Notion UUID
+into PB's relation field fails validation. Until a future PR implements
+the ID lookup, this module skips relation fields in BOTH directions —
+PB relations stay at whatever PR1 reconcile aligned them to; user edits
+to relation fields in either UI do not propagate.
+"""
 from __future__ import annotations
 
 from notion_sync.codec import (
@@ -28,6 +37,10 @@ def notion_page_to_pb_dict(page: dict, field_types: dict[str, dict],
         if pb_name not in field_types:
             continue
         spec = field_types[pb_name]
+        # PR2: skip relation fields — Notion holds Notion UUIDs but PB
+        # expects PB record IDs. Cross-ID translation is a future PR.
+        if spec["type"] == "relation":
+            continue
         out[pb_name] = notion_property_to_pb_field(
             prop_val, pb_type=spec["type"], max_select=spec.get("maxSelect", 1)
         )
@@ -55,6 +68,9 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
         if pb_name == title_field:
             continue
         spec = field_types[pb_name]
+        # PR2: skip relation fields — cross-ID translation deferred.
+        if spec["type"] == "relation":
+            continue
         notion_name = overrides_inv.get(pb_name) or notion_by_snake.get(pb_name)
         if not notion_name or notion_name not in notion_schema:
             continue
