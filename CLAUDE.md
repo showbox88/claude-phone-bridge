@@ -63,10 +63,13 @@ ssh dashboard-server 'systemctl status phone-bridge'
 
 ## Notion sync
 
-PR1 wired the schema and the initial PB ↔ Notion alignment for 6 collections
-(trips/days/plans/todos/contacts/locations). PR2 added the daily auto-sync
-runner. PR3 (not done) will add the Sync Activity decision applier and push
-notifications.
+PR1 + PR2 + PR3 shipped: schema, daily cron runner, decision applier, MCP
+tools, in-app chat-session alerts, 90-day cleanup. See
+**[docs/notion-pb-sync.md](docs/notion-pb-sync.md)** for the full
+architecture / data model / flow / runbook.
+
+Quick reference (the rest of this section is the operational TL;DR — for
+anything deeper, read the doc):
 
 **Daily operation:**
 - systemd timer `notion-sync.timer` fires hourly.
