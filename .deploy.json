@@ -22,7 +22,8 @@
   "keep_files": [".env", ".bridge_uploads", ".bridge_data", ".gmail"],
   "pre_restart": [
     "[ -d .venv ] || python3 -m venv .venv",
-    ".venv/bin/pip install -r requirements.txt --quiet"
+    ".venv/bin/pip install -r requirements.txt --quiet",
+    "cp -u pocketbase/pb_migrations/*.js /opt/pocketbase/pb_migrations/ 2>/dev/null || true"
   ],
-  "restart_cmd": "sudo systemctl restart phone-bridge"
+  "restart_cmd": "sudo systemctl restart pocketbase && sleep 2 && sudo systemctl restart phone-bridge"
 }
