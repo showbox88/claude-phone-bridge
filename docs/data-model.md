@@ -1,304 +1,410 @@
-# Phone Bridge data model reference
+# Phone Bridge: trip data model & workflow
 
-Single source of truth for "what data lives where" — for agents working on
-sync, migration, or new features that touch PocketBase or Notion.
+Canonical reference for the trip-related data in Phone Bridge — covers
+both PocketBase (source of truth) and Notion (mirror), the sync mechanics
+between them, and concrete workflow examples.
 
-Pair with:
-- [docs/notion-pb-sync.md](notion-pb-sync.md) — sync runner architecture
-- [docs/stops-redesign-runbook.md](stops-redesign-runbook.md) — current
-  in-flight migration (days→days+stops)
-- [docs/superpowers/specs/2026-06-03-stops-redesign-design.md](superpowers/specs/2026-06-03-stops-redesign-design.md)
-  — design doc for the stops redesign
+**Audience**: future agents working on sync, migration, MCP tools,
+or new features that touch trip data.
 
-This doc reflects the model **after** the stops redesign Phase 1 ships
-(migrations 18–20 deployed). Anything not yet deployed is called out
-inline.
+Last verified: 2026-06-03 (post stops redesign Phase 1–5).
 
 ---
 
-## 1. Top-level shape
+## Table of contents
 
-PocketBase is the source of truth. Notion is a read/write mirror for a
-chosen subset of collections. The hourly cron runner reconciles both sides.
+1. [Hierarchy](#1-hierarchy)
+2. [PocketBase side — all trip-touching collections](#2-pocketbase-side)
+3. [Notion side — mirror DBs](#3-notion-side)
+4. [Field mapping: PB ↔ Notion](#4-field-mapping)
+5. [Sync pipeline](#5-sync-pipeline)
+6. [Sync Activity (the decision queue)](#6-sync-activity)
+7. [Trip workflows — concrete examples](#7-trip-workflows)
+8. [Known limitations](#8-known-limitations)
+9. [Operations cookbook for agents](#9-operations-cookbook)
+10. [Quick reference: all IDs](#10-quick-reference-all-ids)
+
+---
+
+## 1. Hierarchy
 
 ```
-                                     ┌──────────────────────────┐
-                                     │  PocketBase (SQLite)     │
-PB user collections (14 total)       │  /home/dev/phone-bridge/ │
-                                     │  pocketbase/pb_data/     │
-                                     └──────────────────────────┘
-                                              ▲
-                                              │
-            ┌─────────────────────────────────┼──────────────────────────┐
-            │ 8 SYNC targets                  │ 6 PB-only                │
-            │                                 │                          │
-            │ • trips                         │ • foods                  │
-            │ • days        (container)       │ • daily_briefing         │
-            │ • stops       (atomic event)    │ • claude_memos           │
-            │ • plans                         │ • transactions           │
-            │ • todos                         │ • ideas                  │
-            │ • contacts                      │ • pages                  │
-            │ • locations                     │                          │
-            │ • journal                       │                          │
-            └─────────────────────────────────┴──────────────────────────┘
-                                              ▲
-                                              │ hourly cron
-                                              ▼
-            ┌─────────────────────────────────────────────────────────────┐
-            │  Notion workspace                                           │
-            │                                                             │
-            │  • Trips, Day, Stops, Plans, Todos, Contacts, Location,     │
-            │    Journal                — bidirectional mirror            │
-            │  • Sync Activity          — queue for conflicts / deletes   │
-            └─────────────────────────────────────────────────────────────┘
-
-PB meta collections (2): sync_config (per-target settings),
-                         sync_global (cron timezone / paused flag).
+trips ──< days ──< stops ──→ locations
+   │        │        ├──→ contacts
+   │        │        └──→ journal ──→ trips, days, stops
+   │        │
+   │        └─── (Notion only: dormant historical relations)
+   │
+   └──< plans      ── soft-link "trip is part of plan"
+   └──< todos      ── todos are NOT trip-bound today
+   └──< companions ── trip.companions (multi) → contacts
 ```
 
----
+**Semantic roles**:
+- **`trip`** — a planned period of travel (Tokyo Oct–Dec 2026 etc.). Has a
+  start/end date, a budget, a status. Container for days.
+- **`day`** — one calendar date in a trip. Container for stops. Carries
+  only daily-level info: name, date, weather, daily note, long-form
+  content. **No activity-level fields** (those live on stop).
+- **`stop`** — an atomic event inside a day (a flight leg, a meal, a
+  museum visit, a mood note, a single expense). Carries the actual
+  activity data. Tagged with one or more `categories`.
+- **`location`** — a place (restaurant, hotel, landmark). Stops link to
+  locations; locations are reusable across trips.
+- **`contact`** — a person (companion, guide, host). Stops can link to
+  contacts.
+- **`journal`** — long-form writing (mood note, diary entry, observation,
+  reminder). A stop can attach a journal entry for richer content than
+  `stop.note`'s one-liner.
+- **`plan`** — higher-level life plans; trips can link `related_plan`.
 
-## 2. Pipeline fields — every synced row carries these
-
-Added to all 8 sync-target collections (migration 17 covers the original 6;
-migration 18 adds them to `stops`; migration 20 adds them to `journal`).
-
-**PB side**:
-
-| Field | Type | Purpose |
-|---|---|---|
-| `notion_id` | text | The matched Notion page UUID. Unique index `WHERE notion_id != ''`. Empty for unsynced rows. |
-| `notion_last_edited` | date | The Notion-side `last_edited_time` we saw on the last successful sync. Used by change detection. |
-| `last_synced_at` | date | PB-side wall-clock of last sync — `YYYY-MM-DD HH:MM:SS.SSSZ`. Audit only. |
-
-**Notion side** (every synced DB has these two columns):
-
-| Property | Type | Purpose |
-|---|---|---|
-| `pb_id` | rich_text | The matched PB record id. |
-| `last_synced_at` | date | Notion-side wall-clock — `YYYY-MM-DD`. |
-
-A row is **linked** iff `pb.notion_id != ''` AND Notion page's `pb_id` ==
-that PB row's id. Linking happens automatically in three places:
-- `scripts/reconcile_initial.py` (initial fuzzy match by title + date)
-- `runner.py::_apply_pb_new` (a new PB row creates the Notion page)
-- `runner.py::_apply_notion_new` (a new Notion page creates the PB row)
-
----
-
-## 3. The 8 synced collections
-
-Field names below are PB-side (snake_case). Notion-side property names are
-auto-derived by `snake_to_title()` in `codec.py:36` unless overridden via
-`sync_config.field_map_overrides`. Pipeline fields are omitted from each
-table (see §2).
-
-### 3.1 `trips` → Notion **Trips**
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | text required | Notion title |
-| `date_start` | date | match key for reconcile |
-| `date_end` | date | |
-| `origin` | text | |
-| `destination` | text | |
-| `budget` | number | |
-| `status` | select(1) | Planning / Booked / Ongoing / Done / Cancelled |
-| `type` | select(1) | Leisure / Business / Family / Other |
-| `content` | editor | long-form notes (Notion page body) |
-| `related_plan` | relation→plans | PB-only this round |
-| `companions` | relation→contacts (multi) | PB-only this round |
-
-### 3.2 `days` → Notion **Day** (post-redesign: container only)
-
-| Field | Type | Notes |
-|---|---|---|
-| `name` | text required | Notion title |
-| `date` | date | match key |
-| `weather` | text | NEW in migration 19 |
-| `note` | text | daily summary line |
-| `content` | editor | long-form day text |
-| `trip` | relation→trips | PB-only |
-
-**Dormant on Notion side after Phase 3**: `Reserved, Checkin, Amount,
-Currency, Rate, Amount Usd, Activity Type, Score, Location, Actual Lat,
-Actual Lng`. Sync stops touching them; user deletes from Notion UI when
-convenient. (Field `migrated_to_stop_id` is temporary, removed by
-migration 21.)
-
-### 3.3 `stops` → Notion **Stops** (NEW in migration 18)
-
-The atomic event under a day. See
+**The split between day and stop** is the heart of the design. Before
+2026-06-03 a `day` row carried activity data and you needed N day-rows
+per real calendar day. After the redesign, one real calendar day = one
+day row + N stops. See
 [docs/superpowers/specs/2026-06-03-stops-redesign-design.md](superpowers/specs/2026-06-03-stops-redesign-design.md)
 for full rationale.
 
-| Field | Type | Notes |
-|---|---|---|
-| `name` | text required | agent-generated, e.g. "拉面店 @ 新宿" |
-| `date` | date required | |
-| `reserved` | date | scheduled / booking time (PB `date` stores datetime) |
-| `checkin` | date | actual arrival time |
-| `categories` | select(maxSelect=8) | multi-select: `打卡, 酒店, 餐厅, 购物, 体验, 交通, 笔记, 消费`. Notion sees `multi_select` (codec handles maxSelect>1 → multi_select). |
-| `amount` | number | |
-| `currency` | select(1) | JPY / EUR / USD / CNY / 其他 |
-| `rate` | number | exchange rate used to compute amount_usd |
-| `amount_usd` | number | reporting currency total |
-| `note` | text | short stop-level comment ("汤太咸") |
-| `actual_lat` | number | GPS captured at checkin |
-| `actual_lng` | number | |
-| `day` | relation→days | PB-only this round |
-| `trip` | relation→trips | PB-only — redundant convenience |
-| `location` | relation→locations | PB-only |
-| `contact` | relation→contacts | PB-only |
-| `journal` | relation→journal | PB-only — long-form note |
-
-**Soft category conventions** (NOT schema-enforced):
-- `打卡 / 酒店 / 餐厅 / 购物 / 体验` typically carry `location`
-- `笔记` typically carries `journal`
-- `消费` carries no relation — just an amount; can stack with another category
-- `交通` flexible — flight/train carry `location`; pure delay-noting uses `journal`
-
-### 3.4 `plans` → Notion **Plans**
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | text required | Notion title |
-| `target_date` | date | match key |
-| (other plans fields per migration 13) | | |
-
-### 3.5 `todos` → Notion **Todos**
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | text required | Notion title |
-| `due_date` | date | match key |
-| (other todos fields per migration 8) | | |
-
-### 3.6 `contacts` → Notion **Contacts**
-
-| Field | Type | Notes |
-|---|---|---|
-| `name` | text required | Notion title |
-| (other contacts fields per migration 7) | | |
-
-No date field — match by name only.
-
-### 3.7 `locations` → Notion **Location**
-
-| Field | Type | Notes |
-|---|---|---|
-| `name` | text required | Notion title |
-| `address` | text | |
-| `city` | text | |
-| `phone` | text | |
-| `type` | select(1) | 餐馆 / 超市 / 咖啡馆 / 酒店 / 景点 / 商场 / 机场-车站 / 户外 / 其他 |
-| `rating` | select(1) | ⭐ to ⭐⭐⭐⭐⭐ |
-| `visited` | bool | |
-| `lat`, `lng` | number | indexed `(lat, lng)` |
-| `osm_id`, `amap_poi_id`, `fsq_id` | text | unique-when-non-empty indexes per source (OSM / 高德 / Foursquare) |
-| `content` | editor | |
-
-### 3.8 `journal` → Notion **Journal** (NEW sync target in migration 20)
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | text required | Notion title |
-| `date` | date | |
-| `mood` | select(1) | Happy / Sad / Anxious / Excited / Calm / Frustrated / Grateful / Reflective / Energized |
-| `type` | select(1) | Learning / Feeling / Observation / Event / Diary / **Reminder** (Reminder added in migration 20; UI displays as "注意" in Chinese) |
-| `tags` | select(5) | 工作 / 家人 / 学习 / 读书 / 生活 (multi, up to 5) |
-| `content` | editor | long-form |
-| `related_trip` | relation→trips | PB-only |
-| `related_day` | relation→days | PB-only |
-| `related_stop` | relation→stops | NEW in migration 20, PB-only |
-
 ---
 
-## 4. Sync Activity (Notion-only DB)
+## 2. PocketBase side
 
-The user-facing queue for things needing a human decision. Lives in Notion
-so the user browses natively and clicks `record_link` to jump to the
-affected row. DB UUID is in `env: NOTION_SYNC_ACTIVITY_DB_ID`.
+PocketBase is **source of truth**. All structural changes flow PB → Notion.
+PB lives at `/opt/pocketbase/pocketbase` listening on `127.0.0.1:8090`.
+Working dir: `/opt/pocketbase/`, migrations in `/opt/pocketbase/pb_migrations/`.
 
-| Property | Type | Holds |
+Migrations under `phone-bridge/pocketbase/pb_migrations/` are auto-copied
+to `/opt/pocketbase/pb_migrations/` by the deploy script (`pre_restart`
+step) and PB is restarted to apply them.
+
+### 2.1 `trips`
+
+```
+trips {
+  id                     text (PB-generated 15-char id)
+  title                  text required, max 500
+  date_start             date
+  date_end               date
+  origin                 text
+  destination            text
+  budget                 number
+  status                 select(1) [Planning, Booked, Ongoing, Done, Cancelled]
+  type                   select(1) [Leisure, Business, Family, Other]
+  content                editor (rich text / page body)
+  related_plan           relation→plans (single)
+  companions             relation→contacts (multi, up to 999)
+  notion_id              text  (unique-when-non-empty)
+  notion_last_edited     date
+  last_synced_at         date
+  created                autodate
+  updated                autodate
+}
+
+indexes:
+  CREATE INDEX  idx_trips_date_start  ON trips (date_start)
+  CREATE INDEX  idx_trips_date_end    ON trips (date_end)
+  CREATE INDEX  idx_trips_status      ON trips (status)
+  CREATE INDEX  idx_trips_related_plan ON trips (related_plan)
+  CREATE UNIQUE INDEX idx_trips_notion_id ON trips (notion_id) WHERE notion_id != ''
+```
+
+### 2.2 `days` (container only — post-redesign)
+
+```
+days {
+  id                     text
+  name                   text required, max 500
+  date                   date
+  weather                text     // free-form: "晴", "雨后转晴"
+  note                   text     // daily summary one-liner
+  content                editor   // long-form day text
+  trip                   relation→trips (single)
+  photos                 (whatever the existing photos field was — preserved)
+  notion_id              text (unique-when-non-empty)
+  notion_last_edited     date
+  last_synced_at         date
+  created                autodate
+  updated                autodate
+}
+
+indexes:
+  CREATE INDEX  idx_days_date         ON days (date)
+  CREATE INDEX  idx_days_trip         ON days (trip)
+  CREATE UNIQUE INDEX idx_days_notion_id ON days (notion_id) WHERE notion_id != ''
+```
+
+**Removed in Phase 3 (migration 21)**: `reserved`, `checkin`, `amount`,
+`currency`, `rate`, `amount_usd`, `activity_type`, `score`, `location`,
+`actual_lat`, `actual_lng`, `migrated_to_stop_id`. All migrated to
+`stops`.
+
+### 2.3 `stops` (new in migration 18)
+
+```
+stops {
+  id                     text
+  name                   text required, max 500     // agent-generated, e.g. "拉面店 @ 新宿"
+  date                   date required
+  reserved               date     // planned arrival / booking time (datetime)
+  checkin                date     // actual arrival time (datetime)
+  categories             select(maxSelect=8)
+                         [打卡, 酒店, 餐厅, 购物, 体验, 交通, 笔记, 消费]
+  amount                 number
+  currency               select(1) [JPY, EUR, USD, CNY, 其他]
+  rate                   number   // 1 unit foreign ≈ N USD
+  amount_usd             number
+  note                   text     // short comment ("汤太咸")
+  actual_lat             number
+  actual_lng             number
+  day                    relation→days       (single)
+  trip                   relation→trips      (single — redundant convenience for queries)
+  location               relation→locations  (single)
+  contact                relation→contacts   (single)
+  journal                relation→journal    (single — long-form note)
+  notion_id              text (unique-when-non-empty)
+  notion_last_edited     date
+  last_synced_at         date
+  created                autodate
+  updated                autodate
+}
+
+indexes:
+  CREATE INDEX  idx_stops_date        ON stops (date)
+  CREATE INDEX  idx_stops_day         ON stops (day)
+  CREATE INDEX  idx_stops_trip        ON stops (trip)
+  CREATE INDEX  idx_stops_location    ON stops (location)
+  CREATE INDEX  idx_stops_contact     ON stops (contact)
+  CREATE UNIQUE INDEX idx_stops_notion_id ON stops (notion_id) WHERE notion_id != ''
+```
+
+**Soft category conventions** (NOT enforced):
+| Category | Typical relation | Example |
 |---|---|---|
-| `title` | title | "{op} · {summary[:60]}" |
-| `op` | select | Conflict / Delete? / Possible duplicate / Schema mismatch |
-| `direction` | select | Notion→PB / PB→Notion / Both / None |
-| `collection` | select | which sync target |
-| `record_link` | url | direct Notion link to the affected page |
-| `pb_id` | rich_text | PB record id |
-| `notion_id` | rich_text | Notion page id |
-| `summary` | rich_text | one-line diff |
-| `pb_snapshot` | rich_text | JSON of the PB row at detection |
-| `notion_snapshot` | rich_text | JSON of Notion page (after `notion_page_to_pb_dict`) |
-| `decision` | select | Pending → Use Notion / Use PB / Delete both / Keep both / Merge |
-| `detected_at` | date | when runner first noticed |
-| `applied_at` | date | when applier executed the decision (empty = pending) |
-| `notes` | rich_text | user-editable scratch |
+| `打卡` | location | 景点、地标 |
+| `酒店` | location | 入住、退房 |
+| `餐厅` | location (+ contact) | 吃饭 |
+| `购物` | location | 商店、纪念品 |
+| `体验` | location (+ contact) | 旅行团、按摩、骑单车、看演出 |
+| `交通` | location 和/或 journal | 班机、车次、延误 |
+| `笔记` | journal | 心情、注意、叙述 |
+| `消费` | (无 relation) | 单纯一笔花销，可叠加在其它 category 上 |
 
-**Decision flow:**
-1. Runner detects a conflict → writes Sync Activity row with `decision=Pending`,
-   freezes both sides via `frozen_pairs_for_collection()`.
-2. User sets `decision` in Notion UI.
-3. Next runner pass → `apply_pending_decisions()` reads decisions, executes
-   them (`_apply_one_decision`), stamps `applied_at`.
-4. Row unfreezes, normal sync resumes for that pair.
-5. After 90 days the resolved row is archived by `cleanup_resolved_activity`.
+### 2.4 `locations`
 
-**Silent paths** don't touch Sync Activity:
-- PbOnlyChange / NotionOnlyChange (single-side update)
-- PbNew / NotionNew (creation)
+```
+locations {
+  id, name (required), address, city, phone,
+  type (select 1) [餐馆, 超市, 咖啡馆, 酒店, 景点, 商场, 机场/车站, 户外, 其他]
+  rating (select 1) [⭐...⭐⭐⭐⭐⭐]
+  visited (bool)
+  lat, lng (number)
+  osm_id, amap_poi_id, fsq_id (text, unique-when-non-empty per source)
+  content (editor)
+  notion_id, notion_last_edited, last_synced_at, created, updated
+}
 
----
+indexes:
+  unique osm_id / amap_poi_id / fsq_id (each WHERE != '')
+  (lat, lng) compound, type, city, notion_id
+```
 
-## 5. Meta collections (PB-only)
+### 2.5 `contacts`
 
-### 5.1 `sync_config` — one row per synced target
+```
+contacts {
+  id, name (required),
+  (other fields per migration 7 — name is the only required field)
+  notion_id, notion_last_edited, last_synced_at, created, updated
+}
+```
+
+### 2.6 `journal` (extended in migration 20)
+
+```
+journal {
+  id,
+  title (text required, max 500),
+  date (date),
+  mood (select 1) [Happy, Sad, Anxious, Excited, Calm, Frustrated, Grateful, Reflective, Energized]
+  type (select 1) [Learning, Feeling, Observation, Event, Diary, Reminder]
+  tags (select up to 5) [工作, 家人, 学习, 读书, 生活]
+  content (editor)
+  related_trip (relation→trips, single)
+  related_day  (relation→days, single)
+  related_stop (relation→stops, single)        // NEW in migration 20
+  notion_id, notion_last_edited, last_synced_at (NEW pipeline fields)
+  created, updated
+}
+
+indexes:
+  idx_journal_date, idx_journal_mood
+  CREATE UNIQUE INDEX idx_journal_notion_id ON journal (notion_id) WHERE notion_id != ''
+```
+
+`type=Reminder` is the English value for what's displayed as "注意" in
+Chinese UI. Don't translate the stored value.
+
+### 2.7 `plans` / `todos`
+
+`plans` and `todos` are synced but not central to trip flow. Trips link
+to plans (`trip.related_plan`); todos are independent. Schemas are in
+migrations 8 and 13.
+
+### 2.8 Meta collections (PB-only, not synced)
 
 ```
 sync_config {
   collection           text unique     // 'trips' | 'days' | ... | 'stops' | 'journal'
   notion_db_id         text required   // Notion DB UUID
-  enabled              bool            // off-switch per collection
+  enabled              bool
   field_map_overrides  json            // {"NotionColumnName": "pb_field_name"}; default {}
-  last_synced_at       date            // updated after each pass
-  last_sync_summary    text            // human-readable last result
-  created/updated      autodate
+  last_synced_at       date
+  last_sync_summary    text
 }
-```
 
-**Lookup**: `pb.list_records("sync_config", filter="enabled=true")`.
-**Add a new sync target**: insert one row + add pipeline fields to the
-target collection (see §6 below) + create Notion DB with pb_id + last_synced_at
-columns.
-
-### 5.2 `sync_global` — single row of cross-collection settings
-
-```
-sync_global {
-  timezone         text required   // 'America/New_York' etc. (zoneinfo name)
-  sync_hour_local  number required // hour (0-23) at which the daily pass fires
+sync_global {                          // single row
+  timezone         text required   // 'America/New_York' (zoneinfo name)
+  sync_hour_local  number required // 0-23
   paused           bool            // global kill-switch
-  last_run_at      date            // wall-clock of last actual pass
+  last_run_at      date
 }
 ```
-
-The hourly systemd timer fires `python -m notion_sync.runner`, which exits
-silently unless `sync_global.paused == false` AND local time hour matches
-`sync_hour_local` (see `runner.py::should_run_now`). The `--force-now` flag
-bypasses the time + pause guard.
 
 ---
 
-## 6. Codec rules (PB ↔ Notion field-level translation)
+## 3. Notion side
 
-Lives in `notion_sync/codec.py`. Two functions:
+All databases live under the **Smart Note** page
+(`369acd0fbb8980c8ac72fdab06e709c4`). Each Notion database has one
+data source (collection). The sync runner targets databases by UUID
+(stored in `sync_config.notion_db_id`).
 
-- `pb_field_to_notion_property(value, *, pb_type, notion_type=None, max_select=1)` → dict
-- `notion_property_to_pb_field(prop, *, pb_type, max_select=1)` → value
+### 3.1 Trips — database
 
-**Mapping table** (PB type → Notion type when `notion_type` not pinned):
+- Database id: `df7ea062-7b18-4c4f-98f1-bfec8258c3db`
+- Data source id: `2e5ca117-baef-4cbf-9031-01e7cccf0d9c`
+
+| Property | Type | Notion column → PB field |
+|---|---|---|
+| Title | title | `title` |
+| Dates | date | (NOT round-tripped — PB stores `date_start`/`date_end` separately) |
+| Origin | rich_text | `origin` |
+| Destination | rich_text | `destination` |
+| Budget | number ($) | `budget` |
+| Status | select | `status` |
+| Type | select | `type` |
+| Related Plan | relation → Plans data source | `related_plan` *(PB-only sync)* |
+| Companions | relation → Contacts | `companions` *(PB-only sync)* |
+| Related to Trip Stops (Trip) | relation reverse | auto from `stops.trip` *(PB-only sync)* |
+| Related to Journal (Related Trip) | relation reverse | auto from `journal.related_trip` *(PB-only sync)* |
+| pb_id | rich_text | sync linker |
+| last_synced_at | date | sync linker |
+
+### 3.2 Day — database (container only)
+
+- Database id: `13329dea-4f55-4fc8-8e64-6c1ff19353bb`
+- Data source id: `2220c9f9-4eb3-4df4-b3a0-a7b14f2cf064`
+
+| Property | Type | Notion → PB |
+|---|---|---|
+| Name | title | `name` |
+| Date | date | `date` |
+| Weather | rich_text | `weather` (added 2026-06-03) |
+| Note | rich_text | `note` |
+| Trip | relation → Trips | `trip` *(PB-only sync)* |
+| Related to Journal (Related Day) | relation reverse | auto from `journal.related_day` |
+| pb_id | rich_text | sync linker |
+| last_synced_at | date | sync linker |
+
+Historical "Activity type / Amount / Currency / Rate / Check-in / Reserved /
+Score / Location / Amount (USD) formula" columns were dropped 2026-06-03.
+All that data moved to `stops`.
+
+### 3.3 Stops — database (new 2026-06-03)
+
+- Database id: `15bb0429-a026-48b4-96f8-4447d5060ee3`
+- Data source id: `2f485c77-b15f-40cb-aa58-28e9cfac7e64`
+- Views:
+  - `Default view` (table)
+  - `📅 时间线` — table, sorted by Date ascending
+  - `🏷️ 按类型` — board, grouped by Categories
+  - `🌍 按行程` — table, grouped by Trip, sorted by Date
+
+| Property | Type | Notion → PB |
+|---|---|---|
+| Name | title | `name` |
+| Date | date | `date` |
+| Reserved | date | `reserved` *(datetime; Notion shows date-only on read)* |
+| Checkin | date | `checkin` *(datetime)* |
+| Categories | multi_select [打卡, 酒店, 餐厅, 购物, 体验, 交通, 笔记, 消费] | `categories` |
+| Amount | number | `amount` |
+| Currency | select [JPY, EUR, USD, CNY, 其他] | `currency` |
+| Rate | number | `rate` |
+| Amount Usd | number | `amount_usd` |
+| Note | rich_text | `note` |
+| Actual Lat | number | `actual_lat` |
+| Actual Lng | number | `actual_lng` |
+| Day | relation → Day | `day` *(PB-only sync)* |
+| Trip | relation → Trips | `trip` *(PB-only sync)* |
+| Location | relation → Locations | `location` *(PB-only sync)* |
+| Contact | relation → Contacts | `contact` *(PB-only sync)* |
+| Journal | relation → Journal | `journal` *(PB-only sync)* |
+| pb_id | rich_text | sync linker |
+| last_synced_at | date | sync linker |
+
+### 3.4 Plans / Todos / Contacts / Location — databases
+
+| PB | Notion DB id | Data source id | Title field |
+|---|---|---|---|
+| `plans`     | `c951c7a9-a8f5-4ffd-aea2-1244e437ae46` | (fetch on demand) | `title` |
+| `todos`     | `5d4e3f93-cf13-4707-97c5-59b38940baac` | (fetch on demand) | `title` |
+| `contacts`  | `e304a6c3-4771-4c69-9ffc-97a672a1ac0c` | `caca728e-a3be-4758-aadc-ad26fd6b339f` | `name` |
+| `locations` | `257c34c1-ac50-455d-9c8a-8d810de5c1e5` | `bd067a50-2dcf-44ed-8c43-e9c80925cff3` | `name` |
+
+### 3.5 Journal — database
+
+- Database id: `ccc3b239-682d-47a1-a20e-e33b3c8fae44`
+- Data source id: `2711f877-d03b-4702-88e0-5db59093c532`
+
+| Property | Type | Notion → PB |
+|---|---|---|
+| Title | title | `title` |
+| Date | date | `date` |
+| Mood | select | `mood` |
+| Type | select [Learning, Feeling, Observation, Event, Diary, **Reminder**] | `type` |
+| Tags | multi_select | `tags` |
+| Related Trip | relation → Trips | `related_trip` *(PB-only sync)* |
+| Related Day | relation → Day | `related_day` *(PB-only sync)* |
+| pb_id | rich_text | sync linker (added 2026-06-03) |
+| last_synced_at | date | sync linker (added 2026-06-03) |
+
+`Reminder` option + sync pipeline columns were added 2026-06-03.
+
+### 3.6 Sync Activity — database (decision queue)
+
+- Database id: `373acd0f-bb89-81e2-9142-caaf3cac86f3`
+- Data source id: `373acd0f-bb89-812e-92ea-000b5e80eab9`
+- Env var: `NOTION_SYNC_ACTIVITY_DB_ID`
+
+See [§6](#6-sync-activity) for full schema.
+
+---
+
+## 4. Field mapping
+
+### 4.1 Auto-conversion
+
+Field names auto-translate via two helpers in `notion_sync/codec.py:36-43`:
+
+- `snake_to_title("departure_time")` → `"Departure Time"` (PB → Notion)
+- `title_to_snake("Departure Time")` → `"departure_time"` (Notion → PB)
+
+`title_to_snake` collapses both spaces and hyphens to underscores. So
+`"Check-in"` would become `"check_in"` (no underscore on PB side: PB
+uses `checkin`). **This is why Stops uses `"Checkin"` not `"Check-in"`
+in Notion** — to round-trip cleanly with PB's `checkin`.
+
+### 4.2 Type envelopes (`pb_field_to_notion_property` / `notion_property_to_pb_field`)
 
 | PB type | Notion type | Notes |
 |---|---|---|
@@ -308,195 +414,476 @@ Lives in `notion_sync/codec.py`. Two functions:
 | url | url | |
 | number | number | |
 | bool | checkbox | |
-| date | date | PB `YYYY-MM-DD HH:MM:SS.SSSZ` → Notion `YYYY-MM-DD` (time portion dropped) |
+| date | date | PB `YYYY-MM-DD HH:MM:SS.SSSZ` → Notion `YYYY-MM-DD` (time portion dropped on read) |
 | select maxSelect=1 | select | |
-| select maxSelect>1 | multi_select | — used by `stops.categories`, `journal.tags`, `trips.companions` (relation but treated as multi) |
-| relation | relation | **NOT SYNCED** — see §7 |
+| select maxSelect>1 | multi_select | `stops.categories`, `journal.tags`, `trips.companions` |
+| relation | relation | **NOT SYNCED** — see §8.1 |
 | json | rich_text | JSON-serialized |
 
-When `notion_type` is passed (the destination DB schema told us the actual
-column type), the codec respects it — so a PB `text` field can be encoded
-as `phone_number` if the Notion column is phone-typed.
+When the Notion column type is known (e.g. fetched from data source
+schema), the codec uses *that* type instead of the PB-inferred one. So
+a PB `text` field can be encoded as `phone_number` if the Notion column
+is phone-typed.
 
-**Field name conversion** (`codec.py:36-43`):
-- `snake_to_title("departure_time")` → `"Departure Time"`
-- `title_to_snake("Departure Time")` → `"departure_time"`
+### 4.3 Overrides
 
-If your collection has a Notion column whose name doesn't round-trip
-cleanly (e.g., `"AmountUSD"`), add an entry to
-`sync_config.field_map_overrides`:
+When auto-conversion fails (column name doesn't round-trip cleanly),
+add an entry to `sync_config.field_map_overrides`:
 ```json
-{ "AmountUSD": "amount_usd" }
+{ "AmountUSD": "amount_usd" }    // Notion col name → PB field name
 ```
 
 ---
 
-## 7. Known limitations
+## 5. Sync pipeline
 
-### 7.1 Relations are NOT synced bidirectionally
+`notion_sync/runner.py` runs hourly via systemd timer
+`notion-sync.timer`. Exits silently unless local hour in
+`sync_global.timezone` matches `sync_global.sync_hour_local`. The
+`--force-now` CLI flag bypasses this.
 
-`notion_sync/transform.py` skips `relation`-typed fields in both directions
-(`notion_page_to_pb_dict` lines 40-46; `pb_record_to_notion_props` lines
-70-72). The reason: PB stores PB record ids in its relation field; Notion
-stores Notion page UUIDs. The two ID spaces don't match, so a blind copy
-would write garbage.
+Per pass, for each enabled `sync_config` row C:
 
-**Affected fields today**:
+```python
+# 1. Cleanup
+cleanup_resolved_activity(C.collection, days=90)
+  # Archives Sync Activity rows whose applied_at < today - 90
+
+# 2. Fetch both sides
+pb_rows      = pb.list_records(C.collection)
+notion_pages = nc.query_database(C.notion_db_id)
+frozen       = frozen_pairs_for_collection(C.collection)
+  # set of (pb_id, notion_id) currently blocked by Pending Sync Activity
+
+# 3. Categorize
+actions = categorize(pb_rows, notion_pages, since=C.last_synced_at)
+  # yields one of:
+  #   NoChange         | PbOnlyChange | NotionOnlyChange | BothChanged
+  #   PbNew            | NotionNew
+  #   PbVanished       | NotionVanished
+
+# 4. Dispatch
+for a in actions where _action_ids(a) not in frozen:
+    if PbOnlyChange:     _apply_pb_to_notion(a)         # silent
+    if NotionOnlyChange: _apply_notion_to_pb(a)         # silent
+    if PbNew:            _apply_pb_new(a)               # silent, links back
+    if NotionNew:        _apply_notion_new(a)           # silent, links back
+    if BothChanged:      write_conflict(a)              # → Sync Activity, freeze pair
+    if NotionVanished:   write_delete_question(a, side='notion')
+    if PbVanished:       write_delete_question(a, side='pb')
+
+# 5. Apply user decisions
+apply_pending_decisions(C.collection)
+  # reads Sync Activity rows with decision != Pending, applied_at empty;
+  # executes the chosen action; stamps applied_at
+
+# 6. Stamp
+pb.update_record('sync_config', C.id, {
+    'last_synced_at':    now_iso_datetime(),
+    'last_sync_summary': f'runner: applied={n} conflicts={c} deletes={d}',
+})
+
+# 7. Notify if anything pending
+if any_conflicts_or_deletes_written_this_pass:
+    notify_pending()    # creates an in-app phone-bridge chat session "📋 同步待确认 N 项"
+```
+
+**Change detection** (`runner.py::categorize` + `notion_sync/changeset.py`):
+- PB row "changed" iff `pb.updated > C.last_synced_at`
+- Notion page "changed" iff `notion.last_edited_time > pb.notion_last_edited`
+- "New" iff one side has no linker id pointing at the other side
+- "Vanished" iff a linked id no longer resolves in the other side's results
+
+**Silent paths** (no Sync Activity write):
+- PbOnlyChange / NotionOnlyChange / PbNew / NotionNew
+
+**Loud paths** (Sync Activity row created):
+- BothChanged → `op=Conflict`, freezes the pair
+- *Vanished → `op=Delete?`, freezes the pair
+
+**Logs**:
+- Structured JSONL: `/home/dev/phone-bridge/.bridge_data/sync.log`
+- systemd: `journalctl -u notion-sync.service`
+
+---
+
+## 6. Sync Activity
+
+The user-facing decision queue. Lives in **Notion** so the user clicks
+through to records natively.
+
+| Property | Type | Holds |
+|---|---|---|
+| `title` | title | `"{op} · {summary[:60]}"` |
+| `op` | select | `Conflict` / `Delete?` / `Possible duplicate` / `Schema mismatch` / `Auto-applied` |
+| `direction` | select | `Notion→PB` / `PB→Notion` / `Both` / `None` |
+| `collection` | select | one of: trips, days, plans, todos, contacts, locations, **stops**, **journal** |
+| `record_link` | url | direct Notion link to the affected page |
+| `pb_id` | rich_text | PB record id |
+| `notion_id` | rich_text | Notion page id |
+| `summary` | rich_text | one-line diff |
+| `pb_snapshot` | rich_text | JSON of PB row at detection time |
+| `notion_snapshot` | rich_text | JSON of Notion page (after `notion_page_to_pb_dict`) |
+| `decision` | select | `Pending` → user picks → `Use Notion` / `Use PB` / `Delete both` / `Keep both` / `Merge` / `N/A` |
+| `detected_at` | date | when runner first noticed |
+| `applied_at` | date | when decision was applied (empty = pending) |
+| `notes` | rich_text | user-editable scratch |
+
+**Decision flow**:
+1. Runner detects → writes row with `decision=Pending`, freezes both sides
+2. User opens row in Notion → sets `decision`
+3. Next runner pass → `apply_pending_decisions()` executes → stamps `applied_at`
+4. Row unfreezes, normal sync resumes
+5. 90 days later, resolved row is archived by `cleanup_resolved_activity`
+
+**`Keep both`** is a no-op (logs only) — useful for "yes both are
+legitimate, leave them be". **`Merge`** is not currently implemented in
+the applier (treated as N/A — user must resolve manually).
+
+---
+
+## 7. Trip workflows
+
+These are the recurring patterns. Use these as templates when writing
+MCP tools or agent flows.
+
+### 7.1 Start a new trip
+
+```
+pb.create_record('trips', {
+    'title': '京都 12 月',
+    'date_start': '2026-12-10',
+    'date_end':   '2026-12-20',
+    'status': 'Planning',
+    'type': 'Leisure',
+    'budget': 3000,
+    'origin': 'New York',
+    'destination': '京都',
+})
+```
+
+No Notion call needed. Next sync pass (or `--force-now`) will:
+- See `PbNew`
+- Create matching Notion page in Trips DB
+- Write back `notion_id` to the PB trip row
+
+### 7.2 Add a day to a trip
+
+```
+pb.create_record('days', {
+    'name': '京都 Day 1 — 抵达',
+    'date': '2026-12-10',
+    'trip': '<trip_pb_id>',
+    'weather': '阴',
+})
+```
+
+Same as trips — sync auto-creates the Notion Day page. The `trip` relation
+exists on PB side, but won't propagate to Notion (PR2 limitation). The
+"Trip" column on Notion Day pages stays empty until relation-sync ships.
+
+### 7.3 Record real events as they happen ("我刚在新宿吃了拉面")
+
+The Phone Bridge agent should:
+1. Identify or create the location:
+   ```python
+   matches = pb.list_records('locations',
+       filter='name ~ "拉面" && city = "新宿"')
+   if not matches:
+       loc = pb.create_record('locations', {
+           'name': '一風堂 新宿店',
+           'city': '新宿',
+           'type': '餐馆',
+       })
+   else:
+       loc = matches[0]
+   ```
+
+2. Find (or create) the canonical day for today:
+   ```python
+   today_days = pb.list_records('days',
+       filter=f'trip = "{trip_id}" && date = "2026-12-10"')
+   if today_days:
+       day = today_days[0]
+   else:
+       day = pb.create_record('days', {
+           'name': '京都 Day 1',
+           'date': '2026-12-10',
+           'trip': trip_id,
+       })
+   ```
+
+3. Create the stop:
+   ```python
+   pb.create_record('stops', {
+       'name': '一風堂拉面 @ 新宿',
+       'date': '2026-12-10',
+       'checkin': '2026-12-10 12:30:00',  // optional, agent's best guess
+       'categories': ['餐厅', '消费'],
+       'amount': 1200,
+       'currency': 'JPY',
+       'note': '汤太咸',
+       'day': day['id'],
+       'trip': trip_id,
+       'location': loc['id'],
+   })
+   ```
+
+That's it. No Notion call needed in real-time. Within 1 hour (or on the
+next `sync_now`) the stop appears in Notion.
+
+### 7.4 Daily summary
+
+```
+day = pb.list_records('days', filter=f'trip = "{trip_id}" && date = "{today}"')[0]
+pb.update_record('days', day['id'], {
+    'note':    '累但开心。明天起早去清水寺。',
+    'weather': '晴转多云',
+})
+```
+
+Or — for long-form — create a journal entry:
+```
+pb.create_record('journal', {
+    'title': '京都 Day 1 总结',
+    'date':  '2026-12-10',
+    'type':  'Diary',
+    'mood':  'Happy',
+    'related_trip': trip_id,
+    'related_day':  day['id'],
+    'content': '今天去了 ...（长文）',
+})
+```
+
+### 7.5 Booked a flight ahead of time
+
+```
+pb.create_record('stops', {
+    'name':       '日航 NH 6 JFK→HND',
+    'date':       '2026-12-09',
+    'reserved':   '2026-12-09 19:00:00',  // scheduled departure
+    'checkin':    '',                      // empty until day-of
+    'categories': ['交通', '消费'],
+    'amount':     1112.94,
+    'currency':   'USD',
+    'rate':       1.0,
+    'amount_usd': 1112.94,
+    'day':        day_id,
+    'trip':       trip_id,
+})
+```
+
+On the actual flight day:
+```
+pb.update_record('stops', stop_id, {
+    'checkin': '2026-12-09 20:30:00',     // actual departure (delayed)
+})
+# Optional: add a journal note
+pb.create_record('journal', {
+    'title': 'NH 6 delayed 1.5 hrs',
+    'type':  'Reminder',
+    'related_stop': stop_id,
+    ...
+})
+```
+
+### 7.6 Edit on Notion side
+
+Open the Notion page, edit any column. Within 1 hour the runner:
+- sees `NotionOnlyChange`
+- pulls the new values into PB
+- updates `pb.notion_last_edited` so the round trip doesn't loop
+
+**Relation columns are ignored** — editing "Location" on a Notion Stops
+row does nothing PB-side. Edit on PB (or wait for relation-sync PR).
+
+### 7.7 Conflict resolution
+
+Scenario: user edits the trip title in Notion AND in PB between syncs.
+
+1. Runner detects `BothChanged` → writes Sync Activity row:
+   - `op=Conflict`, `decision=Pending`
+   - `pb_snapshot` + `notion_snapshot` carry both sides verbatim
+2. Phone-bridge creates a chat session `"📋 同步待确认 1 项"`
+3. User opens Sync Activity row in Notion, reviews snapshots, sets
+   `decision = "Use Notion"` (or `Use PB` / `Keep both` / `Delete both`)
+4. Next runner pass: `apply_pending_decisions` reads the row, executes
+   the chosen action, stamps `applied_at`
+5. Row unfreezes → normal sync resumes
+
+### 7.8 Deletion
+
+Same dance as conflict. Vanished side → Sync Activity `op=Delete?`,
+frozen. User decides `Delete both` (propagate the deletion) or
+`Keep both` (resurrect / restore link).
+
+---
+
+## 8. Known limitations
+
+### 8.1 Relations are NOT bidirectionally synced
+
+`notion_sync/transform.py:40-46` (Notion → PB) and `:70-72` (PB → Notion)
+both skip `relation`-typed fields. Reason: PB and Notion use different
+ID spaces (PB record id vs Notion page UUID); a naive copy writes garbage.
+
+**Affected fields**:
 - `trips.related_plan`, `trips.companions`
-- `days.location` *(removed in Phase 3)*
-- `stops.day, stops.trip, stops.location, stops.contact, stops.journal`
-- `journal.related_trip, journal.related_day, journal.related_stop`
+- `stops.day`, `stops.trip`, `stops.location`, `stops.contact`, `stops.journal`
+- `journal.related_trip`, `journal.related_day`, `journal.related_stop`
 
-What this means in practice:
-- PB-side: relations are first-class and reliable
-- Notion-side: relation columns (if you create them) stay empty
-- The user sees full relation graph in PB; Notion shows scalar fields only
+What this means today:
+- PB side: relations are correct and queryable
+- Notion side: relation columns exist but stay empty (sync ignores them)
+- The Notion-side "Related to X (Y)" auto-reverse columns also stay empty
 
-**Fix path** (future PR): build a lookup table `{collection, pb_id} ↔
-{notion_page_id}` from each row's pipeline fields, then in the codec
-translate relation arrays in both directions.
+**Fix path** (future PR — relation-sync): build a lookup table
+`{collection, pb_id} ↔ {notion_page_id}` from each row's pipeline
+fields, extend the codec to translate relation arrays in both directions.
 
-### 7.2 No Notion-side backup
+### 8.2 `date` fields lose time on Notion round-trip
 
-Notion's API can't trigger a workspace backup. PB has `backup.py`. The
-sync system mitigates by:
-- Never destructive-writing to Notion without a Sync Activity entry first
-- All "Delete both" decisions go through `apply_pending_decisions`, which
-  is auditable
-- User exports critical Notion DBs to CSV from the UI for major operations
+PB stores datetime in `date`-typed fields. Notion `date` property reads
+back as `YYYY-MM-DD` only. So `stops.reserved` and `stops.checkin`
+round-trip with time on PB side, but Notion displays date-only. Time
+is preserved in PB — read from PB if you need the precise time.
 
-### 7.3 Journal `type` enum mixes English + Chinese display
+### 8.3 No Notion-side backup
 
-`type` values are English (`Learning, Feeling, Observation, Event, Diary,
-Reminder`) for parity with the original schema. UI / agent displays
-`Reminder` as "注意" in Chinese contexts. **Don't translate the stored
-value** — only the display.
+Notion API can't trigger a workspace backup. PB has `backup.py`
+(snapshots to `.bridge_data/backups/<ts>/`). The sync system mitigates by:
+- Never destructive-writing to Notion without a Sync Activity row first
+- All "Delete both" decisions go through the auditable applier
+- User can manually export Notion DBs to CSV for major operations
 
-### 7.4 `date` fields lose time on round-trip to Notion
+### 8.4 Journal `type` mixes English + Chinese display
 
-PB stores datetime in `date` fields, but Notion's date property serializes
-to `YYYY-MM-DD` (without time) on read. So `stops.reserved` and
-`stops.checkin` round-trip with time intact on the PB side, but their
-Notion-displayed values are date-only. Time is preserved in PB; agents
-operating on times should read from PB, not from Notion-via-sync.
+Stored values are English: `Learning, Feeling, Observation, Event,
+Diary, Reminder`. UI / agent surfaces `Reminder` as "注意" in Chinese
+contexts. Don't translate the stored value.
 
----
+### 8.5 Day's dormant "Related to ..." reverse columns
 
-## 8. Sync runner pipeline (high-level)
-
-`notion_sync/runner.py` per pass (`--force-now` or the hourly tick at
-`sync_hour_local`):
-
-```
-for each enabled sync_config row C:
-    cleanup_resolved_activity(C.collection, days=90)    # archive old SA rows
-
-    pb_rows     = pb.list_records(C.collection)
-    notion_pages = nc.query_database(C.notion_db_id)
-    frozen       = frozen_pairs_for_collection(C.collection)  # blocked by Pending SA
-
-    actions = categorize(pb_rows, notion_pages, since=C.last_synced_at)
-              # yields NoChange / PbOnlyChange / NotionOnlyChange / BothChanged
-              # / PbNew / NotionNew / PbVanished / NotionVanished
-
-    for a in actions where _action_ids(a) not in frozen:
-        match a:
-            PbOnlyChange     → _apply_pb_to_notion       # silent
-            NotionOnlyChange → _apply_notion_to_pb       # silent
-            PbNew            → _apply_pb_new             # silent, links back
-            NotionNew        → _apply_notion_new         # silent, links back
-            BothChanged      → write_conflict           # Sync Activity, freeze
-            NotionVanished   → write_delete_question    # Sync Activity, freeze
-            PbVanished       → write_delete_question    # Sync Activity, freeze
-
-    apply_pending_decisions(C.collection)               # user-set decisions
-
-    pb.update_record("sync_config", C.id, {
-        "last_synced_at": now_iso_datetime(),
-        "last_sync_summary": <pass counts>,
-    })
-
-if any_conflicts_or_deletes_were_written_this_pass:
-    notify_pending()    # creates an in-app PB chat session
-```
+The Notion Day DB has `Related to Journal (Related Day)` which is the
+auto-generated reverse from `journal.related_day`. It stays in the
+schema; the sync ignores it (it's a reverse view of a relation, not a
+stored column). Cosmetic only.
 
 ---
 
-## 9. For agents: common operations
+## 9. Operations cookbook
 
-### 9.1 Add a new PB collection as a sync target
-
-1. Create PB collection (a new `pb_migrations/XXXX_create_<name>.js`).
-2. In the same or a follow-up migration, add the 3 pipeline fields:
-   `notion_id` (text, unique-when-non-empty), `notion_last_edited` (date),
-   `last_synced_at` (date). Pattern: see
-   `1779465617_add_sync_pipeline_fields.js` and migration 18 (which adds
-   them inline in the create).
-3. In Notion, create the destination DB. Required columns: a title prop,
-   `pb_id` (rich_text), `last_synced_at` (date). Other columns must match
-   the PB schema (snake_to_title-derived names, unless you'll add a
-   field_map_overrides entry).
-4. Insert one `sync_config` row: `{collection: "<name>", notion_db_id:
-   "...", enabled: true, field_map_overrides: {}}`.
-5. Run `scripts/reconcile_initial.py --only <name>` to push existing PB
-   rows up + link them.
-6. Add `<name>` to `TITLE_FIELD_BY_COLLECTION` and `DATE_FIELD_BY_COLLECTION`
-   in both `runner.py:55-58` and `reconcile_initial.py:42-50` if title /
-   date fields differ from the defaults.
-7. Trigger a `--force-now` run to verify.
-
-### 9.2 Debug a row that's not syncing
+### 9.1 Trigger an immediate sync
 
 ```bash
 ssh dashboard-server
 cd /home/dev/phone-bridge
 set -a; . ./.env; set +a
+.venv/bin/python -m notion_sync.runner --force-now
+# OR for a single target:
+.venv/bin/python -m notion_sync.runner --force-now --only stops
+tail -50 .bridge_data/sync.log
+```
 
-# 1. Check if the row is frozen by a Pending Sync Activity entry.
+Or via the in-app MCP tool: `mcp__pb__sync_now`.
+
+### 9.2 Pause / resume sync
+
+```bash
+# Pause (every hourly tick skips, logs 'skipped_paused')
 .venv/bin/python -c "
-from notion_sync.activity import frozen_pairs_for_collection
 from notion_sync.pb_api import PBClient
-from notion_sync.notion_api import NotionClient
-pb, nc = PBClient(), NotionClient()
-print(frozen_pairs_for_collection(nc, 'trips'))
+pb = PBClient()
+pb.update_record('sync_global', pb.list_records('sync_global', sort='')[0]['id'], {'paused': True})
 "
 
-# 2. Check pipeline fields on the PB side.
+# Resume
 .venv/bin/python -c "
 from notion_sync.pb_api import PBClient
-r = PBClient().get_record('trips', 'PB_RECORD_ID')
+pb = PBClient()
+pb.update_record('sync_global', pb.list_records('sync_global', sort='')[0]['id'], {'paused': False})
+"
+```
+
+Or via MCP: `mcp__pb__sync_pause` / `mcp__pb__sync_resume`.
+
+### 9.3 Debug "this row isn't syncing"
+
+```bash
+# 1. Frozen by Pending Sync Activity?
+.venv/bin/python -c "
+from notion_sync.notion_api import NotionClient
+from notion_sync.activity import frozen_pairs_for_collection
+print(frozen_pairs_for_collection(NotionClient(), 'stops'))
+"
+
+# 2. Pipeline fields on PB side
+.venv/bin/python -c "
+from notion_sync.pb_api import PBClient
+r = PBClient().get_record('stops', 'STOP_ID')
 print('notion_id:', r.get('notion_id'))
 print('notion_last_edited:', r.get('notion_last_edited'))
 print('last_synced_at:', r.get('last_synced_at'))
 print('updated:', r.get('updated'))
 "
 
-# 3. Force a run with verbose log.
-.venv/bin/python -m notion_sync.runner --force-now --only trips
-sudo journalctl -u notion-sync.service -n 100 --no-pager
+# 3. Force a single-target run + check log
+.venv/bin/python -m notion_sync.runner --force-now --only stops
+tail -50 .bridge_data/sync.log
 ```
 
-### 9.3 Manually mark a Sync Activity decision
+### 9.4 Add a new PB collection as a sync target
 
-In the Notion Sync Activity DB, set `decision` to one of
-`Use Notion / Use PB / Delete both / Keep both`. Next runner pass
-(`--force-now` to skip wait) applies it via
-`runner.py::apply_pending_decisions`.
+1. Write a new `pb_migrations/XXXX_create_<name>.js` that creates the
+   collection AND includes the 3 pipeline fields (`notion_id`,
+   `notion_last_edited`, `last_synced_at`). Pattern: see migration 18.
+2. `deploy` — auto-applies the migration via the new `cp -u` step.
+3. Create the Notion destination DB (via `mcp__notion__notion-create-database`
+   or by hand). Required columns: a title prop, `pb_id` (rich_text),
+   `last_synced_at` (date). Other columns should match the PB schema with
+   names that `snake_to_title` produces.
+4. Get the new Notion DB's UUID, insert sync_config row:
+   ```bash
+   .venv/bin/python -c "
+   from notion_sync.pb_api import PBClient
+   PBClient().create_record('sync_config', {
+       'collection': '<name>',
+       'notion_db_id': '<dashed-uuid>',
+       'enabled': True,
+       'field_map_overrides': {},
+   })
+   "
+   ```
+5. Add `<name>` to **both** `TITLE_FIELD_BY_COLLECTION` and
+   `DATE_FIELD_BY_COLLECTION` in `notion_sync/runner.py` AND
+   `scripts/reconcile_initial.py` if its title/date fields differ
+   from `title`/empty.
+6. **Add `<name>` to the Sync Activity DB's `collection` select options**
+   (use `mcp__notion__notion-update-data-source ALTER COLUMN`). The
+   runner queries `collection = '<name>'` and Notion 400s on unknown
+   select values.
+7. Run `scripts/reconcile_initial.py --only <name>` to push existing
+   PB rows up + populate pb_id back-links.
+8. `--force-now` to verify end-to-end.
 
-### 9.4 Add a new category to `stops.categories`
+### 9.5 Add a category to `stops.categories`
 
-1. Write a new PB migration that mutates `stops.categories.values` to
-   append the new value (pattern: see migration 20's handling of
-   `journal.type.values`).
-2. Add the same value to the Notion Stops DB's `Categories` multi-select
-   property (Notion UI).
-3. No codec change needed — multi_select envelope handles arbitrary values.
+1. New PB migration mutates `stops.categories.values` (pattern: see
+   migration 20's handling of `journal.type.values`).
+2. Add the same value to the Notion Stops DB's Categories multi-select
+   (via MCP `notion-update-data-source` or Notion UI).
+3. No codec change. Multi-select envelope is generic.
 
-### 9.5 Update field_map_overrides
+### 9.6 Apply a Sync Activity decision manually
+
+In Notion, set the row's `decision` to one of `Use Notion` / `Use PB` /
+`Delete both` / `Keep both`. Next runner pass picks it up. Use
+`--force-now` to apply immediately.
+
+### 9.7 Update field_map_overrides
 
 If you add a Notion column whose name doesn't snake-case to its PB
 counterpart cleanly:
-
 ```bash
 .venv/bin/python -c "
 from notion_sync.pb_api import PBClient
@@ -507,3 +894,89 @@ overrides['Trip Type'] = 'type'   # Notion col name → PB field name
 pb.update_record('sync_config', row['id'], {'field_map_overrides': overrides})
 "
 ```
+
+### 9.8 Backup before risky ops
+
+```bash
+.venv/bin/python -c "
+from pathlib import Path
+from notion_sync.pb_api import PBClient
+from notion_sync.backup import backup_collections
+print(backup_collections(PBClient(), Path('.bridge_data/backups')))
+"
+# Snapshot of every base collection lands in .bridge_data/backups/<ts>/<name>.json
+```
+
+---
+
+## 10. Quick reference: all IDs
+
+### PB sync targets (8)
+
+| PB collection | Title field | Date field | Notion DB |
+|---|---|---|---|
+| `trips`     | title | date_start  | `df7ea062-7b18-4c4f-98f1-bfec8258c3db` |
+| `days`      | name  | date        | `13329dea-4f55-4fc8-8e64-6c1ff19353bb` |
+| `stops`     | name  | date        | `15bb0429-a026-48b4-96f8-4447d5060ee3` |
+| `plans`     | title | target_date | `c951c7a9-a8f5-4ffd-aea2-1244e437ae46` |
+| `todos`     | title | due_date    | `5d4e3f93-cf13-4707-97c5-59b38940baac` |
+| `contacts`  | name  | —           | `e304a6c3-4771-4c69-9ffc-97a672a1ac0c` |
+| `locations` | name  | —           | `257c34c1-ac50-455d-9c8a-8d810de5c1e5` |
+| `journal`   | title | date        | `ccc3b239-682d-47a1-a20e-e33b3c8fae44` |
+
+### Notion data source IDs (for MCP `notion-update-data-source` calls)
+
+| DB | data_source_id |
+|---|---|
+| Trips     | `2e5ca117-baef-4cbf-9031-01e7cccf0d9c` |
+| Day       | `2220c9f9-4eb3-4df4-b3a0-a7b14f2cf064` |
+| Stops     | `2f485c77-b15f-40cb-aa58-28e9cfac7e64` |
+| Locations | `bd067a50-2dcf-44ed-8c43-e9c80925cff3` |
+| Contacts  | `caca728e-a3be-4758-aadc-ad26fd6b339f` |
+| Journal   | `2711f877-d03b-4702-88e0-5db59093c532` |
+| Sync Activity | `373acd0f-bb89-812e-92ea-000b5e80eab9` |
+
+### Parent page (where all DBs live)
+
+- **Smart Note**: `369acd0fbb8980c8ac72fdab06e709c4`
+
+### Env vars (in `/home/dev/phone-bridge/.env`)
+
+- `POCKETBASE_URL` — `http://127.0.0.1:8090`
+- `POCKETBASE_ADMIN_EMAIL`, `POCKETBASE_ADMIN_PASSWORD` — PB auth
+- `NOTION_TOKEN` — internal integration token
+- `NOTION_SYNC_ACTIVITY_DB_ID` — `373acd0f-bb89-81e2-9142-caaf3cac86f3`
+
+### Hosts / services
+
+- `dashboard-server.tail4cfa2.ts.net` — Tailscale host
+- `phone-bridge.service` — FastAPI on 127.0.0.1:8001
+- `pocketbase.service` — PB on 127.0.0.1:8090, working dir `/opt/pocketbase/`
+- `notion-sync.timer` — hourly cron firing `notion-sync.service`
+- `mcp_pb.service` — claude.ai Custom Connector MCP server for PB tools
+
+### Migration files (chronological)
+
+| # | File | What it does |
+|---|---|---|
+| 01 | create_trips.js | trips |
+| 02 | create_locations.js | locations |
+| 03 | create_days.js | days (atomic — legacy shape) |
+| 04 | create_foods.js | foods (PB-only) |
+| 05 | create_journal.js | journal |
+| 06 | extend_existing.js | adds content (editor) + fsq_id |
+| 07 | create_contacts.js | contacts |
+| 08 | create_todos.js | todos |
+| 09 | create_daily_briefing.js | daily_briefing (PB-only) |
+| 10 | create_claude_memos.js | claude_memos (PB-only) |
+| 11 | create_transactions.js | transactions (PB-only) |
+| 12 | create_ideas.js | ideas (PB-only) |
+| 13 | create_plans.js | plans |
+| 14 | link_trips_to_plans_contacts.js | trips.related_plan + companions |
+| 15 | create_pages.js | pages (PB-only) |
+| 16 | create_sync_meta.js | sync_config + sync_global |
+| 17 | add_sync_pipeline_fields.js | adds notion_id/notion_last_edited/last_synced_at to 6 sync targets |
+| 18 | create_stops.js | NEW stops collection |
+| 19 | extend_days_for_stops_migration.js | days += weather + migrated_to_stop_id |
+| 20 | extend_journal_for_stops.js | journal += related_stop + Reminder + pipeline fields |
+| 21 | drop_legacy_days_fields.js | days -= 12 legacy fields |
