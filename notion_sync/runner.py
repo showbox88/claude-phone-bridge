@@ -53,8 +53,8 @@ from notion_sync.transform import (
 
 
 TITLE_FIELD_BY_COLLECTION = {
-    "trips": "title", "plans": "title", "todos": "title",
-    "days":  "name",  "contacts": "name", "locations": "name",
+    "trips": "title", "plans": "title", "todos": "title", "journal": "title",
+    "days":  "name",  "contacts": "name", "locations": "name", "stops": "name",
 }
 
 

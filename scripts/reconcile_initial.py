@@ -40,12 +40,13 @@ from notion_sync.transform import (
 
 
 TITLE_FIELD_BY_COLLECTION = {
-    "trips": "title", "plans": "title", "todos": "title",
-    "days":  "name",  "contacts": "name", "locations": "name",
+    "trips": "title", "plans": "title", "todos": "title", "journal": "title",
+    "days":  "name",  "contacts": "name", "locations": "name", "stops": "name",
 }
 DATE_FIELD_BY_COLLECTION = {
-    "trips": "date_start", "days": "date",
+    "trips": "date_start", "days": "date",  "stops": "date",
     "todos": "due_date",   "plans": "target_date",
+    "journal": "date",
     "contacts": "",        "locations": "",
 }
 
