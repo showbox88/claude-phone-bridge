@@ -223,21 +223,32 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
             elif isinstance(a, BothChanged):
                 pb_id = a.pb_row["id"]
                 notion_id = a.notion_page["id"]
-                if pending_action_exists(nc, op="Conflict",
-                                          pb_id=pb_id, notion_id=notion_id):
-                    continue
-                notion_dict = notion_page_to_pb_dict(
-                    a.notion_page, field_types, overrides,
+                notion_last_edited = a.notion_page.get("last_edited_time")
+                already_queued = pending_action_exists(
+                    nc, op="Conflict", pb_id=pb_id, notion_id=notion_id,
                 )
-                write_conflict(
-                    nc,
-                    collection=collection,
-                    summary=str(a.pb_row.get(title_field, ""))[:120],
-                    pb_id=pb_id, notion_id=notion_id,
-                    pb_snapshot=a.pb_row,
-                    notion_snapshot=notion_dict,
-                    record_link=a.notion_page.get("url"),
-                )
+                if not already_queued:
+                    notion_dict = notion_page_to_pb_dict(
+                        a.notion_page, field_types, overrides,
+                    )
+                    write_conflict(
+                        nc,
+                        collection=collection,
+                        summary=str(a.pb_row.get(title_field, ""))[:120],
+                        pb_id=pb_id, notion_id=notion_id,
+                        pb_snapshot=a.pb_row,
+                        notion_snapshot=notion_dict,
+                        record_link=a.notion_page.get("url"),
+                    )
+                # Acknowledge that we've seen this Notion edit even though
+                # we won't apply it. Without this, next run would see
+                # notion.last_edited_time > pb.notion_last_edited and
+                # misclassify as NotionOnlyChange, silently overwriting
+                # the user's PB-side edit (data loss). PB's actual data
+                # fields stay untouched — user resolves via Sync Activity.
+                pb.update_record(collection, pb_id, {
+                    "notion_last_edited": notion_last_edited,
+                })
             elif isinstance(a, NotionVanished):
                 pb_id = a.pb_row["id"]
                 missing_nid = a.pb_row.get("notion_id") or ""
