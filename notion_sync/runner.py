@@ -601,9 +601,15 @@ def notify_pending(nc: NotionClient) -> int:
     title = f"📋 同步待确认 {n} 项"
     body = "\n".join(summaries)
 
+    # VAPID key check up front — push.send_to_all silently no-ops when
+    # the private key is missing, which would make the "push_sent" log
+    # line a lie. Be explicit.
+    if not os.environ.get("VAPID_PRIVATE_KEY", "").strip():
+        log_event("push_skipped", reason="VAPID_PRIVATE_KEY not configured",
+                  pending=n)
+        return n
+
     try:
-        # Lazy import — keeps runner usable in environments where
-        # push (and its pywebpush dep) isn't installed.
         import sys as _sys
         from pathlib import Path as _Path
         _sys.path.insert(0, str(_Path(__file__).resolve().parents[1]))
