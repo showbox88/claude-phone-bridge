@@ -18,6 +18,8 @@ Run manually for testing:
 from __future__ import annotations
 
 import argparse
+import json as _json
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -195,6 +197,137 @@ def _apply_notion_new(action: NotionNew, *,
     })
 
 
+def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
+                            collection: str,
+                            field_types: dict,
+                            overrides: dict,
+                            overrides_inv: dict,
+                            title_field: str,
+                            notion_schema: dict) -> int:
+    """Apply user-decided Sync Activity rows for this collection.
+
+    Reads Sync Activity for rows where:
+      - collection matches
+      - applied_at is empty (not yet applied)
+      - decision in {Use Notion, Use PB, Delete both, Keep both}
+
+    Applies the decision (writes/deletes on the side(s) chosen), then
+    marks applied_at on the Sync Activity row so subsequent runs don't
+    re-apply. Errors per row are logged but do not abort the loop.
+
+    Returns the number of decisions applied (incl. Keep both no-ops).
+    """
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    filt = {"and": [
+        {"property": "collection", "select": {"equals": collection}},
+        {"property": "applied_at", "date":   {"is_empty": True}},
+        {"or": [
+            {"property": "decision", "select": {"equals": "Use Notion"}},
+            {"property": "decision", "select": {"equals": "Use PB"}},
+            {"property": "decision", "select": {"equals": "Delete both"}},
+            {"property": "decision", "select": {"equals": "Keep both"}},
+        ]},
+    ]}
+    rows = nc.query_database(db_id, filter_=filt)
+    applied = 0
+    for row in rows:
+        try:
+            _apply_one_decision(
+                row, pb=pb, nc=nc, collection=collection,
+                field_types=field_types, overrides=overrides,
+                overrides_inv=overrides_inv, title_field=title_field,
+                notion_schema=notion_schema,
+            )
+            nc.update_page(row["id"], properties={
+                "applied_at": {"date": {"start": now_iso_date()}},
+            })
+            applied += 1
+        except Exception as e:
+            log_event("decision_apply_error",
+                      collection=collection,
+                      sa_row=row.get("id"),
+                      error=str(e),
+                      trace=traceback.format_exc()[:1000])
+    return applied
+
+
+def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
+                        collection: str, field_types: dict,
+                        overrides: dict, overrides_inv: dict,
+                        title_field: str, notion_schema: dict) -> None:
+    p = row["properties"]
+    decision = (p.get("decision", {}).get("select") or {}).get("name") or ""
+    pb_id = "".join(rt.get("plain_text", "") for rt in p.get("pb_id", {}).get("rich_text", []))
+    notion_id = "".join(rt.get("plain_text", "") for rt in p.get("notion_id", {}).get("rich_text", []))
+
+    def _load_snap(prop_name: str) -> dict:
+        s = "".join(rt.get("plain_text", "") for rt in p.get(prop_name, {}).get("rich_text", []))
+        if not s:
+            return {}
+        try:
+            return _json.loads(s)
+        except _json.JSONDecodeError:
+            return {}
+
+    if decision == "Keep both":
+        log_event("decision_applied", collection=collection,
+                  decision=decision, pb_id=pb_id, notion_id=notion_id)
+        return
+
+    if decision == "Delete both":
+        if pb_id:
+            try:
+                pb.delete_record(collection, pb_id)
+            except Exception:
+                pass   # already gone — treat as success
+        if notion_id:
+            try:
+                nc.update_page(notion_id, archived=True)
+            except Exception:
+                pass   # already archived / missing — treat as success
+        log_event("decision_applied", collection=collection,
+                  decision=decision, pb_id=pb_id, notion_id=notion_id)
+        return
+
+    if decision == "Use Notion":
+        notion_snap = _load_snap("notion_snapshot")
+        if not pb_id or not notion_id or not notion_snap:
+            raise RuntimeError("Use Notion requires both IDs + notion_snapshot")
+        # Refresh the page's last_edited_time so subsequent runs see NoChange.
+        try:
+            current_page = nc.retrieve_page(notion_id)
+            notion_last_edited = current_page.get("last_edited_time", "")
+        except Exception:
+            notion_last_edited = ""
+        pb.update_record(collection, pb_id, notion_snap | {
+            "notion_last_edited": notion_last_edited,
+            "last_synced_at": now_iso_datetime(),
+        })
+        log_event("decision_applied", collection=collection,
+                  decision=decision, pb_id=pb_id, notion_id=notion_id)
+        return
+
+    if decision == "Use PB":
+        pb_snap = _load_snap("pb_snapshot")
+        if not pb_id or not notion_id or not pb_snap:
+            raise RuntimeError("Use PB requires both IDs + pb_snapshot")
+        props = pb_record_to_notion_props(
+            pb_snap, field_types, overrides_inv, title_field, notion_schema,
+        )
+        props["last_synced_at"] = {"date": {"start": now_iso_date()}}
+        page = nc.update_page(notion_id, properties=props)
+        pb.update_record(collection, pb_id, {
+            "notion_last_edited": page.get("last_edited_time", ""),
+            "last_synced_at": now_iso_datetime(),
+        })
+        log_event("decision_applied", collection=collection,
+                  decision=decision, pb_id=pb_id, notion_id=notion_id)
+        return
+
+    # Merge or unknown — leave un-applied; user must handle manually.
+    raise RuntimeError(f"decision not auto-appliable: {decision!r}")
+
+
 def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     collection = cfg_row["collection"]
     notion_db_id = cfg_row["notion_db_id"]
@@ -207,6 +340,15 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
 
     notion_db = nc.retrieve_database(notion_db_id)
     notion_schema = notion_db.get("properties", {})
+
+    # Phase 0: apply user-decided Sync Activity rows. After this, applied
+    # rows have applied_at set and won't appear in the freeze set below.
+    decisions_applied = apply_pending_decisions(
+        pb, nc, collection=collection,
+        field_types=field_types, overrides=overrides,
+        overrides_inv=overrides_inv, title_field=title_field,
+        notion_schema=notion_schema,
+    )
 
     pb_rows = pb.list_records(collection, sort="")
     notion_rows = nc.query_database(notion_db_id)
@@ -323,6 +465,7 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
         "conflicts": counts.get("BothChanged", 0),
         "deletes": counts.get("NotionVanished", 0) + counts.get("PbVanished", 0),
         "frozen_skipped": skipped_frozen,
+        "decisions_applied": decisions_applied,
     }
 
 
