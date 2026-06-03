@@ -45,8 +45,60 @@ def title_to_snake(name: str) -> str:
 
 def pb_field_to_notion_property(value: Any, *,
                                 pb_type: str,
-                                max_select: int = 1) -> dict:
-    """Convert a PB value to the body of a Notion property update."""
+                                max_select: int = 1,
+                                notion_type: str | None = None) -> dict:
+    """Convert a PB value to the body of a Notion property update.
+
+    If ``notion_type`` is given, the envelope is chosen by Notion's property
+    type (so a PB ``text`` field whose Notion column is ``phone_number`` is
+    encoded correctly). Otherwise the encoding is inferred from ``pb_type``,
+    preserving the original behavior.
+    """
+    # Notion-type-driven path: trust the destination schema.
+    if notion_type is not None:
+        s_value = "" if value is None else str(value)
+        if notion_type == "title":
+            if not s_value:
+                return {"title": []}
+            return {"title": [{"type": "text", "text": {"content": s_value[:2000]}}]}
+        if notion_type == "rich_text":
+            if not s_value:
+                return {"rich_text": []}
+            return {"rich_text": [{"type": "text", "text": {"content": s_value[:2000]}}]}
+        if notion_type == "number":
+            if value is None or value == "":
+                return {"number": None}
+            try:
+                return {"number": float(value) if isinstance(value, str) else value}
+            except (TypeError, ValueError):
+                return {"number": None}
+        if notion_type == "checkbox":
+            return {"checkbox": bool(value)}
+        if notion_type == "date":
+            if not s_value:
+                return {"date": None}
+            return {"date": {"start": s_value.split(" ")[0].split("T")[0]}}
+        if notion_type == "select":
+            return {"select": {"name": s_value} if s_value else None}
+        if notion_type == "multi_select":
+            items = value if isinstance(value, list) else ([value] if value else [])
+            return {"multi_select": [{"name": str(v)} for v in items if v]}
+        if notion_type == "relation":
+            ids = value if isinstance(value, list) else ([value] if value else [])
+            return {"relation": [{"id": i} for i in ids if i]}
+        if notion_type == "email":
+            return {"email": s_value or None}
+        if notion_type == "url":
+            return {"url": s_value or None}
+        if notion_type == "phone_number":
+            return {"phone_number": s_value or None}
+        if notion_type == "people":
+            ids = value if isinstance(value, list) else ([value] if value else [])
+            return {"people": [{"id": i} for i in ids if i]}
+        # Unknown Notion type — encode as best-effort rich_text so we don't crash.
+        return {"rich_text": [{"type": "text", "text": {"content": s_value}}]} if s_value else {"rich_text": []}
+
+    # Fallback PB-type-driven path (original behavior).
     if pb_type in ("text", "editor", "email", "url"):
         s = str(value or "")
         if pb_type == "email":

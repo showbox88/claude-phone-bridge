@@ -85,10 +85,27 @@ def notion_page_to_pb_dict(page: dict, field_types: dict[str, dict],
 
 def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
                               overrides_inv: dict[str, str],
-                              title_field: str) -> dict:
+                              title_field: str,
+                              notion_schema: dict[str, dict]) -> dict:
+    """Build Notion properties for a PB record.
+
+    notion_schema is {prop_name: {"type": str, ...}} from retrieve_database.
+    Only properties that exist on the Notion side are emitted; the Notion
+    column name (preserving its actual case) is found by snake-case lookup.
+    """
     SKIP = {"id", "created", "updated", "collectionId", "collectionName",
             "expand", "notion_id", "notion_last_edited", "last_synced_at"}
-    notion_title_prop = snake_to_title(title_field)
+
+    # Map snake-cased Notion property name -> actual Notion column name.
+    # E.g. "Last contact" -> ("last_contact", "Last contact").
+    notion_by_snake = {title_to_snake(name): name for name in notion_schema}
+
+    # Find Notion's actual title column (whatever it's called there).
+    title_prop_name = next(
+        (n for n, s in notion_schema.items() if s.get("type") == "title"),
+        None,
+    )
+
     props: dict = {}
     for pb_name, value in record.items():
         if pb_name in SKIP:
@@ -98,13 +115,29 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
         if pb_name == title_field:
             continue
         spec = field_types[pb_name]
-        notion_name = overrides_inv.get(pb_name, snake_to_title(pb_name))
+
+        # Resolve Notion column name. Order of preference:
+        #   1. explicit override (overrides_inv: pb_name -> notion_name)
+        #   2. case-preserving lookup by snake-case
+        # If neither yields a column that exists on Notion, skip the field.
+        notion_name = overrides_inv.get(pb_name) or notion_by_snake.get(pb_name)
+        if not notion_name or notion_name not in notion_schema:
+            continue
+
+        notion_type = notion_schema[notion_name].get("type")
         props[notion_name] = pb_field_to_notion_property(
-            value, pb_type=spec["type"], max_select=spec.get("maxSelect", 1)
+            value,
+            pb_type=spec["type"],
+            max_select=spec.get("maxSelect", 1),
+            notion_type=notion_type,
         )
-    title_val = record.get(title_field, "") or ""
-    props[notion_title_prop] = {"title": [{"type": "text",
-                                            "text": {"content": str(title_val)[:200]}}]}
+
+    # Title goes into Notion's actual title property (whatever it's named).
+    if title_prop_name is not None:
+        title_val = record.get(title_field, "") or ""
+        props[title_prop_name] = {"title": [{"type": "text",
+                                              "text": {"content": str(title_val)[:200]}}]}
+
     return props
 
 
@@ -122,6 +155,11 @@ def reconcile_one(collection: str, notion_db_id: str,
     field_types = collection_field_types(pb, collection)
     title_field = TITLE_FIELD_BY_COLLECTION.get(collection, "title")
     date_field = DATE_FIELD_BY_COLLECTION.get(collection, "")
+
+    # Notion DB schema — needed to skip nonexistent properties and to pick
+    # the correct envelope per Notion property type.
+    notion_db = nc.retrieve_database(notion_db_id)
+    notion_schema = notion_db.get("properties", {})
 
     pb_rows = pb.list_records(collection)
     notion_rows = nc.query_database(notion_db_id)
@@ -205,7 +243,8 @@ def reconcile_one(collection: str, notion_db_id: str,
     pb_only = [r for r in pb_unmatched if r["id"] not in used_pb_ids]
     pb_only_created = 0
     for r in pb_only:
-        props = pb_record_to_notion_props(r, field_types, overrides_inv, title_field)
+        props = pb_record_to_notion_props(r, field_types, overrides_inv,
+                                          title_field, notion_schema)
         props["pb_id"] = {"rich_text": [{"type": "text", "text": {"content": r["id"]}}]}
         props["last_synced_at"] = {"date": {"start": now_iso_date()}}
         if dry_run:

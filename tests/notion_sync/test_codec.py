@@ -131,3 +131,32 @@ def test_rich_text_str_guards_non_dict_items():
     notion_prop = {"type": "rich_text",
                    "rich_text": [None, {"plain_text": "hello"}, "stringy"]}
     assert notion_property_to_pb_field(notion_prop, pb_type="text") == "hello"
+
+
+def test_notion_type_phone_number():
+    out = pb_field_to_notion_property("+1234567890", pb_type="text", notion_type="phone_number")
+    assert out == {"phone_number": "+1234567890"}
+    out = pb_field_to_notion_property("", pb_type="text", notion_type="phone_number")
+    assert out == {"phone_number": None}
+
+
+def test_notion_type_title_overrides_text():
+    # PB stores it as text, but the Notion column is a `title` — use title envelope.
+    out = pb_field_to_notion_property("Trip name", pb_type="text", notion_type="title")
+    assert out == {"title": [{"type": "text", "text": {"content": "Trip name"}}]}
+
+
+def test_notion_type_email():
+    out = pb_field_to_notion_property("a@b.com", pb_type="text", notion_type="email")
+    assert out == {"email": "a@b.com"}
+
+
+def test_notion_type_url_empty_returns_none():
+    out = pb_field_to_notion_property("", pb_type="text", notion_type="url")
+    assert out == {"url": None}
+
+
+def test_notion_type_select_unknown_falls_back():
+    # Unknown notion_type → defensive fallback to rich_text.
+    out = pb_field_to_notion_property("x", pb_type="text", notion_type="weird_type")
+    assert out == {"rich_text": [{"type": "text", "text": {"content": "x"}}]}
