@@ -392,11 +392,161 @@ async def smartnote_open_context(args: dict[str, Any]) -> dict[str, Any]:  # noq
 
 
 # ---------------------------------------------------------------------------
+# Notion sync tools — give Claude visibility + manual control over the
+# daily sync runner without dropping to Bash.
+# ---------------------------------------------------------------------------
+@tool(
+    "sync_now",
+    "Run the Notion ↔ PocketBase sync runner immediately (bypasses the time "
+    "guard). Optional 'collection' arg restricts to one sync target. Returns "
+    "the summary: applied / conflicts / deletes / frozen_skipped / "
+    "decisions_applied / pending counts. Use this when the user says 'sync "
+    "now' or wants to push a fresh edit through.",
+    {
+        "type": "object",
+        "properties": {
+            "collection": {"type": "string",
+                           "description": "Restrict to one of trips/days/plans/todos/contacts/locations"},
+        },
+    },
+)
+async def sync_now(args: dict[str, Any]) -> dict[str, Any]:
+    import subprocess
+    cmd = [
+        "/home/dev/phone-bridge/.venv/bin/python", "-m", "notion_sync.runner",
+        "--force-now",
+    ]
+    coll = args.get("collection")
+    if coll:
+        cmd += ["--only", coll]
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd,
+            cwd="/home/dev/phone-bridge",
+            capture_output=True, text=True, timeout=600,
+        )
+        log_path = "/home/dev/phone-bridge/.bridge_data/sync.log"
+        tail: list[Any] = []
+        try:
+            with open(log_path, encoding="utf-8") as f:
+                for line in f.readlines()[-12:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        tail.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        tail.append({"raw": line})
+        except OSError:
+            pass
+        return _ok({
+            "exit_code": proc.returncode,
+            "stdout": proc.stdout[-1000:],
+            "stderr": proc.stderr[-1000:],
+            "log_tail": tail,
+        })
+    except subprocess.TimeoutExpired:
+        return _err("sync_now timed out after 10 minutes")
+    except Exception as e:
+        return _err(f"sync_now failed: {e}")
+
+
+@tool(
+    "sync_queue_status",
+    "Read the Sync Activity Notion DB and report Pending counts + first "
+    "few summaries. Use this to answer 'do I have any pending sync items?' "
+    "without making the user open Notion. Does NOT modify anything.",
+    {},
+)
+async def sync_queue_status(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+    notion_token = os.environ.get("NOTION_TOKEN", "")
+    db_id        = os.environ.get("NOTION_SYNC_ACTIVITY_DB_ID", "")
+    if not notion_token or not db_id:
+        return _err("NOTION_TOKEN or NOTION_SYNC_ACTIVITY_DB_ID not set")
+    body = json.dumps({"filter": {"and": [
+        {"property": "decision",   "select": {"equals": "Pending"}},
+        {"property": "applied_at", "date":   {"is_empty": True}},
+    ]}}).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://api.notion.com/v1/databases/{db_id}/query",
+        data=body, method="POST",
+        headers={
+            "Authorization":  f"Bearer {notion_token}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type":   "application/json",
+        },
+    )
+    try:
+        def _do() -> Any:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode("utf-8"))
+        data = await asyncio.to_thread(_do)
+    except Exception as e:
+        return _err(f"sync_queue_status query failed: {e}")
+    rows = data.get("results", [])
+    items: list[dict[str, Any]] = []
+    for r in rows[:10]:
+        p = r.get("properties", {})
+        op   = (p.get("op", {}).get("select") or {}).get("name")
+        coll = (p.get("collection", {}).get("select") or {}).get("name")
+        summ = "".join(rt.get("plain_text", "")
+                       for rt in p.get("summary", {}).get("rich_text", []))
+        link = (p.get("record_link", {}) or {}).get("url")
+        items.append({
+            "op": op, "collection": coll, "summary": summ, "record_link": link,
+            "sync_activity_page": r.get("url"),
+        })
+    return _ok({"pending": len(rows), "items": items})
+
+
+@tool(
+    "sync_pause",
+    "Pause the daily Notion ↔ PB sync runner. While paused, the hourly "
+    "cron exits silently and no sync happens. Use when the user wants "
+    "to make a series of edits without the runner interfering.",
+    {},
+)
+async def sync_pause(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+    try:
+        data = await _pb("GET", "/api/collections/sync_global/records?perPage=1")
+        items = data.get("items", [])
+        if not items:
+            return _err("sync_global has no rows")
+        row = items[0]
+        await _pb("PATCH", f"/api/collections/sync_global/records/{row['id']}",
+                  body={"paused": True})
+        return _ok({"ok": True, "paused": True})
+    except Exception as e:
+        return _err(f"sync_pause failed: {e}")
+
+
+@tool(
+    "sync_resume",
+    "Resume the daily Notion ↔ PB sync runner after a pause. The next "
+    "hourly cron tick will run normally (only at the configured local hour).",
+    {},
+)
+async def sync_resume(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+    try:
+        data = await _pb("GET", "/api/collections/sync_global/records?perPage=1")
+        items = data.get("items", [])
+        if not items:
+            return _err("sync_global has no rows")
+        row = items[0]
+        await _pb("PATCH", f"/api/collections/sync_global/records/{row['id']}",
+                  body={"paused": False})
+        return _ok({"ok": True, "paused": False})
+    except Exception as e:
+        return _err(f"sync_resume failed: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Server assembly + tool-name exports
 # ---------------------------------------------------------------------------
 _SAFE = [
     pb_list_collections, pb_search, pb_get, pb_get_collection,
     pb_create, pb_update, smartnote_open_context,
+    sync_now, sync_queue_status, sync_pause, sync_resume,
 ]
 _GATED = [
     pb_delete, pb_create_collection, pb_update_collection, pb_delete_collection,
@@ -413,6 +563,7 @@ def _qualified(name: str) -> str:
 SAFE_TOOL_NAMES: list[str] = [_qualified(n) for n in (
     "pb_list_collections", "pb_search", "pb_get", "pb_get_collection",
     "pb_create", "pb_update", "smartnote_open_context",
+    "sync_now", "sync_queue_status", "sync_pause", "sync_resume",
 )]
 # Destructive / schema-mutating tools — deliberately NOT pre-approved.
 GATED_TOOL_NAMES: list[str] = [_qualified(n) for n in (
@@ -440,5 +591,11 @@ PROMPT_HINT = (
     "Destructive ops (pb_delete, pb_create_collection, pb_update_collection, "
     "pb_delete_collection) require user approval, so only reach for them when "
     "asked. Call pb_list_collections at the start so you use the right "
-    "collection names and exact select values."
+    "collection names and exact select values.\n\n"
+    "For the Notion ↔ PB sync (trips/days/plans/todos/contacts/locations): "
+    "sync_queue_status shows Pending items the user needs to decide on; "
+    "sync_now triggers an immediate sync (use when user says '同步一下'); "
+    "sync_pause / sync_resume toggle sync_global.paused. Daily sync still "
+    "fires automatically at the configured local hour — these tools are "
+    "for on-demand control."
 )

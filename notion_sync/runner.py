@@ -22,7 +22,7 @@ import json as _json
 import os
 import sys
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from notion_sync.activity import (
@@ -535,8 +535,41 @@ def main() -> int:
         log_event("notify_error", error=str(e),
                   trace=traceback.format_exc()[:500])
 
+    # Archive resolved Sync Activity rows older than 90 days.
+    try:
+        archived = cleanup_resolved_activity(nc, days=90)
+        if archived:
+            overall["archived_resolved"] = archived
+            log_event("cleanup_archived", count=archived)
+    except Exception as e:
+        log_event("cleanup_error", error=str(e),
+                  trace=traceback.format_exc()[:500])
+
     log_event("run_end", **overall)
     return 0
+
+
+def cleanup_resolved_activity(nc: NotionClient, *, days: int = 90) -> int:
+    """Archive Sync Activity rows whose applied_at is older than `days`.
+
+    Keeps the queue table small over time. Archives (not hard-deletes)
+    so the user can un-archive in Notion to recover a row if needed.
+    Returns the number archived.
+    """
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
+    rows = nc.query_database(db_id, filter_={"and": [
+        {"property": "applied_at", "date": {"is_not_empty": True}},
+        {"property": "applied_at", "date": {"before": cutoff}},
+    ]})
+    archived = 0
+    for r in rows:
+        try:
+            nc.update_page(r["id"], archived=True)
+            archived += 1
+        except Exception as e:
+            log_event("cleanup_error", page=r.get("id"), error=str(e))
+    return archived
 
 
 def notify_pending(nc: NotionClient) -> int:
