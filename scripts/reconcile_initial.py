@@ -55,7 +55,10 @@ def now_iso_date() -> str:
 
 
 def now_iso_datetime() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    """Match PB's autodate format ('YYYY-MM-DD HH:MM:SS.SSSZ') so
+    string comparison against pb.updated stays correct on later runs."""
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%d %H:%M:%S") + f".{now.microsecond // 1000:03d}Z"
 
 
 def _pb_id_in_notion_page(p: dict) -> str:

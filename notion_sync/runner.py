@@ -60,7 +60,16 @@ def now_iso_date() -> str:
 
 
 def now_iso_datetime() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    """Match PB's autodate format exactly: 'YYYY-MM-DD HH:MM:SS.SSSZ'.
+
+    Without milliseconds + Z, PB normalizes our shorter string to '.000Z'
+    on storage, and string-comparing it against PB-autodate values (which
+    carry real ms) produces wrong results — pb.updated always looks
+    'greater' than our sync_config.last_synced_at, triggering perpetual
+    PbOnlyChange even when nothing changed.
+    """
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%d %H:%M:%S") + f".{now.microsecond // 1000:03d}Z"
 
 
 def should_run_now(sync_global: dict, *, now_utc: datetime | None = None) -> bool:
