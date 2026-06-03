@@ -121,3 +121,39 @@ def pending_action_exists(client, *, op: str, pb_id: str = "",
                         "rich_text": {"equals": notion_id}})
     rows = client.query_database(db_id, filter_={"and": clauses}, page_size=1)
     return len(rows) > 0
+
+
+def frozen_pairs_for_collection(client, *, collection: str
+                                ) -> tuple[set[str], set[str]]:
+    """Return (frozen_pb_ids, frozen_notion_ids) for rows the runner
+    must NOT touch because they have a Pending Conflict or Delete?
+    decision waiting for the user.
+
+    Freeze semantics: once a row is in Sync Activity with decision=Pending,
+    the row's data on both sides is locked. The runner skips it on every
+    subsequent run until the user picks a decision (PR3 applies decisions
+    and clears the Pending state). Prevents data loss from subsequent
+    edits cascading into NotionOnlyChange / PbOnlyChange before the user
+    can decide.
+    """
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    filt = {"and": [
+        {"property": "collection", "select": {"equals": collection}},
+        {"property": "decision",   "select": {"equals": "Pending"}},
+        {"or": [
+            {"property": "op", "select": {"equals": "Conflict"}},
+            {"property": "op", "select": {"equals": "Delete?"}},
+        ]},
+    ]}
+    rows = client.query_database(db_id, filter_=filt)
+    frozen_pb: set[str] = set()
+    frozen_notion: set[str] = set()
+    for r in rows:
+        p = r.get("properties", {})
+        pid = "".join(rt.get("plain_text", "") for rt in p.get("pb_id", {}).get("rich_text", []))
+        nid = "".join(rt.get("plain_text", "") for rt in p.get("notion_id", {}).get("rich_text", []))
+        if pid:
+            frozen_pb.add(pid)
+        if nid:
+            frozen_notion.add(nid)
+    return frozen_pb, frozen_notion

@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from notion_sync.activity import (
+    frozen_pairs_for_collection,
     pending_action_exists,
     write_conflict,
     write_delete_question,
@@ -93,6 +94,32 @@ def should_run_now(sync_global: dict, *, now_utc: datetime | None = None) -> boo
 def _pb_id_from_notion(page: dict) -> str:
     prop = page.get("properties", {}).get("pb_id", {})
     return "".join(rt.get("plain_text", "") for rt in prop.get("rich_text", []))
+
+
+def _action_ids(a) -> tuple[str | None, str | None]:
+    """Extract (pb_id, notion_id) for an Action, for the freeze check.
+
+    Either side may be None if that side doesn't exist (e.g. PbNew has
+    no notion_id yet; NotionVanished has a 'missing' notion_id stored
+    on the PB row).
+    """
+    if isinstance(a, NoChange):
+        return (a.pb_id, a.notion_id)
+    if isinstance(a, PbOnlyChange):
+        return (a.pb_row["id"], a.notion_id)
+    if isinstance(a, NotionOnlyChange):
+        return (a.pb_id, a.notion_page["id"])
+    if isinstance(a, BothChanged):
+        return (a.pb_row["id"], a.notion_page["id"])
+    if isinstance(a, PbNew):
+        return (a.pb_row["id"], None)
+    if isinstance(a, NotionNew):
+        return (None, a.notion_page["id"])
+    if isinstance(a, NotionVanished):
+        return (a.pb_row["id"], a.pb_row.get("notion_id") or None)
+    if isinstance(a, PbVanished):
+        return (_pb_id_from_notion(a.notion_page) or None, a.notion_page["id"])
+    return (None, None)
 
 
 def _apply_pb_to_notion(action: PbOnlyChange, *,
@@ -185,12 +212,27 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     notion_rows = nc.query_database(notion_db_id)
     actions = categorize(pb_rows, notion_rows, last_synced_at=last_synced_at)
 
+    # Freeze: rows with a Pending Conflict or Delete? in Sync Activity
+    # are off-limits until the user picks a decision. The runner skips
+    # any action whose pb_id or notion_id appears in either set, no
+    # matter what category it falls into. Prevents subsequent edits
+    # from cascading into NotionOnlyChange / PbOnlyChange / etc and
+    # silently overwriting the conflicted side before the user decides.
+    frozen_pb_ids, frozen_notion_ids = frozen_pairs_for_collection(
+        nc, collection=collection,
+    )
+
     counts: dict[str, int] = {}
+    skipped_frozen = 0
     for a in actions:
         counts[type(a).__name__] = counts.get(type(a).__name__, 0) + 1
 
     for a in actions:
         try:
+            pid, nid = _action_ids(a)
+            if (pid and pid in frozen_pb_ids) or (nid and nid in frozen_notion_ids):
+                skipped_frozen += 1
+                continue
             if isinstance(a, NoChange):
                 continue
             elif isinstance(a, PbOnlyChange):
@@ -221,40 +263,26 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                                    title_field=title_field,
                                    pb=pb, nc=nc)
             elif isinstance(a, BothChanged):
+                # First detection only — re-detection is short-circuited
+                # by the outer freeze check above.
                 pb_id = a.pb_row["id"]
                 notion_id = a.notion_page["id"]
-                notion_last_edited = a.notion_page.get("last_edited_time")
-                already_queued = pending_action_exists(
-                    nc, op="Conflict", pb_id=pb_id, notion_id=notion_id,
+                notion_dict = notion_page_to_pb_dict(
+                    a.notion_page, field_types, overrides,
                 )
-                if not already_queued:
-                    notion_dict = notion_page_to_pb_dict(
-                        a.notion_page, field_types, overrides,
-                    )
-                    write_conflict(
-                        nc,
-                        collection=collection,
-                        summary=str(a.pb_row.get(title_field, ""))[:120],
-                        pb_id=pb_id, notion_id=notion_id,
-                        pb_snapshot=a.pb_row,
-                        notion_snapshot=notion_dict,
-                        record_link=a.notion_page.get("url"),
-                    )
-                # Acknowledge that we've seen this Notion edit even though
-                # we won't apply it. Without this, next run would see
-                # notion.last_edited_time > pb.notion_last_edited and
-                # misclassify as NotionOnlyChange, silently overwriting
-                # the user's PB-side edit (data loss). PB's actual data
-                # fields stay untouched — user resolves via Sync Activity.
-                pb.update_record(collection, pb_id, {
-                    "notion_last_edited": notion_last_edited,
-                })
+                write_conflict(
+                    nc,
+                    collection=collection,
+                    summary=str(a.pb_row.get(title_field, ""))[:120],
+                    pb_id=pb_id, notion_id=notion_id,
+                    pb_snapshot=a.pb_row,
+                    notion_snapshot=notion_dict,
+                    record_link=a.notion_page.get("url"),
+                )
             elif isinstance(a, NotionVanished):
+                # First detection only.
                 pb_id = a.pb_row["id"]
                 missing_nid = a.pb_row.get("notion_id") or ""
-                if pending_action_exists(nc, op="Delete?",
-                                          pb_id=pb_id, notion_id=missing_nid):
-                    continue
                 write_delete_question(
                     nc,
                     collection=collection,
@@ -264,11 +292,9 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                     snapshot=a.pb_row,
                 )
             elif isinstance(a, PbVanished):
+                # First detection only.
                 missing_pid = _pb_id_from_notion(a.notion_page)
                 notion_id = a.notion_page["id"]
-                if pending_action_exists(nc, op="Delete?",
-                                          pb_id=missing_pid, notion_id=notion_id):
-                    continue
                 notion_dict = notion_page_to_pb_dict(
                     a.notion_page, field_types, overrides,
                 )
@@ -295,6 +321,7 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                     + counts.get("NotionNew", 0)),
         "conflicts": counts.get("BothChanged", 0),
         "deletes": counts.get("NotionVanished", 0) + counts.get("PbVanished", 0),
+        "frozen_skipped": skipped_frozen,
     }
 
 
