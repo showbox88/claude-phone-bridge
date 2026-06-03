@@ -29,15 +29,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notion_sync.activity import write_possible_duplicate
 from notion_sync.backup import backup_collections
-from notion_sync.codec import (
-    notion_property_to_pb_field,
-    pb_field_to_notion_property,
-    snake_to_title,
-    title_to_snake,
-)
 from notion_sync.matching import best_match
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
+from notion_sync.transform import (
+    collection_field_types,
+    notion_page_to_pb_dict,
+    pb_record_to_notion_props,
+)
 
 
 TITLE_FIELD_BY_COLLECTION = {
@@ -51,94 +50,12 @@ DATE_FIELD_BY_COLLECTION = {
 }
 
 
-def collection_field_types(pb: PBClient, name: str) -> dict[str, dict]:
-    for c in pb.list_collections():
-        if c["name"] == name:
-            return {
-                f["name"]: {"type": f["type"], "maxSelect": f.get("maxSelect", 1)}
-                for f in c.get("fields", [])
-            }
-    raise RuntimeError(f"collection not found: {name}")
-
-
 def now_iso_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def now_iso_datetime() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def notion_page_to_pb_dict(page: dict, field_types: dict[str, dict],
-                           overrides: dict[str, str]) -> dict:
-    out: dict = {}
-    for prop_name, prop_val in page.get("properties", {}).items():
-        pb_name = overrides.get(prop_name, title_to_snake(prop_name))
-        if pb_name not in field_types:
-            continue
-        spec = field_types[pb_name]
-        out[pb_name] = notion_property_to_pb_field(
-            prop_val, pb_type=spec["type"], max_select=spec.get("maxSelect", 1)
-        )
-    return out
-
-
-def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
-                              overrides_inv: dict[str, str],
-                              title_field: str,
-                              notion_schema: dict[str, dict]) -> dict:
-    """Build Notion properties for a PB record.
-
-    notion_schema is {prop_name: {"type": str, ...}} from retrieve_database.
-    Only properties that exist on the Notion side are emitted; the Notion
-    column name (preserving its actual case) is found by snake-case lookup.
-    """
-    SKIP = {"id", "created", "updated", "collectionId", "collectionName",
-            "expand", "notion_id", "notion_last_edited", "last_synced_at"}
-
-    # Map snake-cased Notion property name -> actual Notion column name.
-    # E.g. "Last contact" -> ("last_contact", "Last contact").
-    notion_by_snake = {title_to_snake(name): name for name in notion_schema}
-
-    # Find Notion's actual title column (whatever it's called there).
-    title_prop_name = next(
-        (n for n, s in notion_schema.items() if s.get("type") == "title"),
-        None,
-    )
-
-    props: dict = {}
-    for pb_name, value in record.items():
-        if pb_name in SKIP:
-            continue
-        if pb_name not in field_types:
-            continue
-        if pb_name == title_field:
-            continue
-        spec = field_types[pb_name]
-
-        # Resolve Notion column name. Order of preference:
-        #   1. explicit override (overrides_inv: pb_name -> notion_name)
-        #   2. case-preserving lookup by snake-case
-        # If neither yields a column that exists on Notion, skip the field.
-        notion_name = overrides_inv.get(pb_name) or notion_by_snake.get(pb_name)
-        if not notion_name or notion_name not in notion_schema:
-            continue
-
-        notion_type = notion_schema[notion_name].get("type")
-        props[notion_name] = pb_field_to_notion_property(
-            value,
-            pb_type=spec["type"],
-            max_select=spec.get("maxSelect", 1),
-            notion_type=notion_type,
-        )
-
-    # Title goes into Notion's actual title property (whatever it's named).
-    if title_prop_name is not None:
-        title_val = record.get(title_field, "") or ""
-        props[title_prop_name] = {"title": [{"type": "text",
-                                              "text": {"content": str(title_val)[:200]}}]}
-
-    return props
 
 
 def _pb_id_in_notion_page(p: dict) -> str:
