@@ -39,18 +39,6 @@ from notion_sync.transform import (
 )
 
 
-TITLE_FIELD_BY_COLLECTION = {
-    "trips": "title", "plans": "title", "todos": "title", "journal": "title",
-    "days":  "name",  "contacts": "name", "locations": "name", "stops": "name",
-}
-DATE_FIELD_BY_COLLECTION = {
-    "trips": "date_start", "days": "date",  "stops": "date",
-    "todos": "due_date",   "plans": "target_date",
-    "journal": "date",
-    "contacts": "",        "locations": "",
-}
-
-
 def now_iso_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -69,13 +57,13 @@ def _pb_id_in_notion_page(p: dict) -> str:
 
 def reconcile_one(collection: str, notion_db_id: str,
                   overrides: dict[str, str],
+                  title_field: str,
+                  date_field: str,
                   pb: PBClient, nc: NotionClient,
                   dry_run: bool) -> dict:
     print(f"\n=== {collection} ===")
     overrides_inv = {v: k for k, v in overrides.items()}
     field_types = collection_field_types(pb, collection)
-    title_field = TITLE_FIELD_BY_COLLECTION.get(collection, "title")
-    date_field = DATE_FIELD_BY_COLLECTION.get(collection, "")
 
     # Notion DB schema — needed to skip nonexistent properties and to pick
     # the correct envelope per Notion property type.
@@ -239,6 +227,8 @@ def main() -> int:
                 collection=t["collection"],
                 notion_db_id=t["notion_db_id"],
                 overrides=t.get("field_map_overrides") or {},
+                title_field=t.get("title_field") or "title",
+                date_field=t.get("date_field") or "",
                 pb=pb, nc=nc,
                 dry_run=args.dry_run,
             )
