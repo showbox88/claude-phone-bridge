@@ -197,6 +197,70 @@
       </form>
     </dialog>
 
+    <!-- Add-sync-target dialog: opened from inside the sync-settings modal. -->
+    <dialog id="sync-add-dialog" class="sync-add-dialog">
+      <form method="dialog" class="sa-form">
+        <header class="sa-head">
+          <span class="sa-title">新增同步</span>
+          <button class="icon-btn" value="cancel" type="submit"
+                  aria-label="取消" data-icon="close"></button>
+        </header>
+        <div class="sa-fields">
+          <label class="sa-row">
+            <span>PB 集合</span>
+            <select id="sa-collection"></select>
+          </label>
+          <label class="sa-row">
+            <span>Notion 标题列 (title_field)</span>
+            <select id="sa-title-field"></select>
+          </label>
+          <label class="sa-row">
+            <span>日期列 (date_field, 可选)</span>
+            <select id="sa-date-field"></select>
+          </label>
+          <label class="sa-row sa-toggle">
+            <input id="sa-auto-sync" type="checkbox" checked>
+            <span>自动同步 (写 PB 立即推 Notion)</span>
+          </label>
+        </div>
+        <div class="sa-submit-bar">
+          <button id="sa-submit" type="button" class="sa-go">创建并同步</button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- Add-sync-target dialog: opened from inside the sync-settings modal. -->
+    <dialog id="sync-add-dialog" class="sync-add-dialog">
+      <form method="dialog" class="sa-form">
+        <header class="sa-head">
+          <span class="sa-title">新增同步</span>
+          <button class="icon-btn" value="cancel" type="submit"
+                  aria-label="取消" data-icon="close"></button>
+        </header>
+        <div class="sa-fields">
+          <label class="sa-row">
+            <span>PB 集合</span>
+            <select id="sa-collection"></select>
+          </label>
+          <label class="sa-row">
+            <span>Notion 标题列 (title_field)</span>
+            <select id="sa-title-field"></select>
+          </label>
+          <label class="sa-row">
+            <span>日期列 (date_field, 可选)</span>
+            <select id="sa-date-field"></select>
+          </label>
+          <label class="sa-row sa-toggle">
+            <input id="sa-auto-sync" type="checkbox" checked>
+            <span>自动同步 (写 PB 立即推 Notion)</span>
+          </label>
+        </div>
+        <div class="sa-submit-bar">
+          <button id="sa-submit" type="button" class="sa-go">创建并同步</button>
+        </div>
+      </form>
+    </dialog>
+
     <footer class="composer">
       <div class="composer-inner">
         <div id="attach-bar" class="attach-bar hidden"></div>
@@ -233,8 +297,8 @@
     </footer>
   </div>
 
-  <script src="/static/icons.js?v=42"></script>
+  <script src="/static/icons.js?v=43"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=43"></script>
+  <script src="/static/app.js?v=44"></script>
 </body>
 </html>

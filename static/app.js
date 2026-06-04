@@ -1931,6 +1931,15 @@
               <button id="ss-save" type="button" class="primary">保存</button>
             </div>
             <div class="wr-status" id="ss-status"></div>
+            <div id="sync-targets-section" class="sync-targets-section">
+              <h4>同步表</h4>
+              <div id="sync-targets-tbody" class="sync-targets-tbody">
+                <div class="sync-targets-loading">加载中…</div>
+              </div>
+              <button id="sync-targets-add" type="button" class="sync-targets-add">
+                + 新增同步表
+              </button>
+            </div>
           </div>
         </div>
       `;
@@ -1938,6 +1947,8 @@
       m.addEventListener('click', () => m.classList.add('hidden'));
       m.querySelector('.modal').addEventListener('click', (e) => e.stopPropagation());
       m.querySelector('.modal-close').addEventListener('click', () => m.classList.add('hidden'));
+      const addBtn = m.querySelector('#sync-targets-add');
+      if (addBtn) addBtn.addEventListener('click', openAddSyncTarget);
 
       m.querySelector('#ss-save').addEventListener('click', async () => {
         const body = {
@@ -1996,6 +2007,142 @@
     } catch (e) {
       setSSStatus('加载失败: ' + e.message, true);
     }
+    loadSyncTargets();
+  }
+
+  async function loadSyncTargets() {
+    const tbody = document.getElementById('sync-targets-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '<div class="sync-targets-loading">加载中…</div>';
+    try {
+      const r = await fetch(apiUrl('/api/sync/targets'));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      renderSyncTargets(data);
+      window.__sync_available = data.available || [];
+    } catch (e) {
+      tbody.innerHTML = '<div class="sync-targets-error">同步配置读取失败: '
+                       + escapeHtml(String(e)) + '</div>';
+    }
+  }
+
+  function renderSyncTargets(data) {
+    const tbody = document.getElementById('sync-targets-tbody');
+    if (!tbody) return;
+    const rows = (data.configured || []).map(t => `
+      <div class="st-row" data-collection="${escapeHtml(t.collection)}">
+        <span class="st-name">${escapeHtml(t.collection)}</span>
+        <label class="st-check">
+          <input type="checkbox" data-key="enabled" ${t.enabled ? 'checked' : ''}>启用
+        </label>
+        <label class="st-check">
+          <input type="checkbox" data-key="auto_sync" ${t.auto_sync ? 'checked' : ''}>自动
+        </label>
+        <input class="st-field" data-key="title_field"
+               value="${escapeHtml(t.title_field || '')}" placeholder="title_field">
+        <input class="st-field" data-key="date_field"
+               value="${escapeHtml(t.date_field || '')}" placeholder="date_field">
+        <button class="st-del" type="button" aria-label="删除">✕</button>
+      </div>
+    `).join('');
+    tbody.innerHTML = rows || '<div class="sync-targets-empty">还没有同步表</div>';
+    tbody.querySelectorAll('.st-row').forEach(rowEl => {
+      const col = rowEl.dataset.collection;
+      rowEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () =>
+          patchSyncTarget(col, { [cb.dataset.key]: cb.checked }));
+      });
+      rowEl.querySelectorAll('input.st-field').forEach(inp => {
+        inp.addEventListener('change', () =>
+          patchSyncTarget(col, { [inp.dataset.key]: inp.value.trim() }));
+      });
+      rowEl.querySelector('.st-del').addEventListener('click', () =>
+        confirmDeleteSyncTarget(col));
+    });
+  }
+
+  async function patchSyncTarget(collection, patch) {
+    try {
+      const r = await fetch(apiUrl('/api/sync/targets/' + encodeURIComponent(collection)), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + await r.text());
+    } catch (e) {
+      alert('保存失败: ' + e);
+      loadSyncTargets();        // re-render with server's actual state
+    }
+  }
+
+  async function confirmDeleteSyncTarget(collection) {
+    if (!confirm('停止同步 `' + collection + '`?\nNotion DB 将保留(不会删除)。')) return;
+    try {
+      const r = await fetch(apiUrl('/api/sync/targets/' + encodeURIComponent(collection)),
+                            { method: 'DELETE' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' — ' + await r.text());
+      loadSyncTargets();
+    } catch (e) {
+      alert('删除失败: ' + e);
+    }
+  }
+
+  function openAddSyncTarget() {
+    const dlg = document.getElementById('sync-add-dialog');
+    const selColl = document.getElementById('sa-collection');
+    const selTitle = document.getElementById('sa-title-field');
+    const selDate  = document.getElementById('sa-date-field');
+    const cbAuto   = document.getElementById('sa-auto-sync');
+    selColl.innerHTML = '';
+    (window.__sync_available || []).forEach(av => {
+      const opt = document.createElement('option');
+      opt.value = av.collection;
+      opt.textContent = av.collection;
+      selColl.appendChild(opt);
+    });
+    function refreshFieldDropdowns() {
+      const sel = (window.__sync_available || []).find(a => a.collection === selColl.value);
+      selTitle.innerHTML = '';
+      selDate.innerHTML  = '<option value="">— (不用日期)</option>';
+      (sel ? sel.fields : []).forEach(f => {
+        const ot = document.createElement('option');
+        ot.value = f.name; ot.textContent = f.name + ' (' + f.type + ')';
+        if (f.type === 'text' && (f.name === 'title' || f.name === 'name')) {
+          ot.selected = true;
+        }
+        selTitle.appendChild(ot);
+        if (f.type === 'date') {
+          const od = document.createElement('option');
+          od.value = f.name; od.textContent = f.name; selDate.appendChild(od);
+        }
+      });
+    }
+    selColl.onchange = refreshFieldDropdowns;
+    refreshFieldDropdowns();
+    cbAuto.checked = true;
+    dlg.showModal();
+    document.getElementById('sa-submit').onclick = async () => {
+      const payload = {
+        collection: selColl.value,
+        title_field: selTitle.value,
+        date_field: selDate.value,
+        auto_sync: cbAuto.checked,
+      };
+      try {
+        const r = await fetch(apiUrl('/api/sync/targets'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const body = await r.json();
+        if (!r.ok) throw new Error(body.detail || body.error || ('HTTP ' + r.status));
+        dlg.close();
+        alert('已创建,后台正在做首次对齐');
+        loadSyncTargets();
+      } catch (e) {
+        alert('创建失败: ' + e);
+      }
+    };
   }
 
   function fillSyncSettings(data) {
