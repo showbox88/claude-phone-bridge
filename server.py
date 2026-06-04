@@ -53,6 +53,11 @@ import push
 import report
 import pb_tools
 
+import notion_sync.config as sync_config_registry
+from notion_sync.notion_api import NotionClient
+from notion_sync.pb_api import PBClient
+from notion_sync.provisioner import provision_notion_db
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("bridge")
@@ -1588,6 +1593,206 @@ async def api_settings_notion_sync_put(body: dict):
         "paused":            bool(row.get("paused")),
         "last_run_at":       row.get("last_run_at") or "",
     }
+
+
+# ---------- REST: sync_config registry (Task 7) ----------
+
+_SYSTEM_PB_COLLECTIONS = {
+    "sync_config", "sync_global",
+    "_pb_users_auth_", "_superusers", "_mfas", "_otps",
+    "_authOrigins", "_externalAuths",
+}
+
+
+def _pb_collection_field_names(pb: PBClient, name: str) -> set[str]:
+    """Field names of one PB collection. Raises if not found."""
+    raw = pb._http("GET", f"/api/collections/{name}")  # noqa: SLF001
+    return {f["name"] for f in raw.get("fields", [])}
+
+
+@app.get("/api/sync/targets")
+async def api_sync_targets_list():
+    """List configured sync targets + PB collections still available to enable."""
+    def _do():
+        pb = PBClient()
+        targets = sync_config_registry.load_all(pb, fresh=True)
+        configured = [
+            {
+                "id": t.id, "collection": t.collection,
+                "notion_db_id": t.notion_db_id,
+                "enabled": t.enabled, "auto_sync": t.auto_sync,
+                "title_field": t.title_field, "date_field": t.date_field,
+                "field_map_overrides": t.field_map_overrides,
+                "last_synced_at": t.last_synced_at,
+                "last_sync_summary": t.last_sync_summary,
+            }
+            for t in targets
+        ]
+        configured_names = {t.collection for t in targets}
+        all_colls = pb.list_collections()
+        available = []
+        for c in all_colls:
+            if c.get("type") != "base":
+                continue
+            name = c.get("name", "")
+            if not name or name in _SYSTEM_PB_COLLECTIONS or name in configured_names:
+                continue
+            fields = []
+            for f in c.get("fields", []):
+                spec = {"name": f["name"], "type": f["type"]}
+                if f.get("required"): spec["required"] = True
+                if f["type"] == "select":
+                    spec["values"] = f.get("values", [])
+                    spec["maxSelect"] = f.get("maxSelect", 1)
+                fields.append(spec)
+            available.append({"collection": name, "fields": fields})
+        return {"configured": configured, "available": available}
+    return await asyncio.to_thread(_do)
+
+
+@app.post("/api/sync/targets")
+async def api_sync_targets_create(body: dict | None = None):
+    """End-to-end: provision Notion DB + insert sync_config + spawn reconcile."""
+    body = body or {}
+    collection  = (body.get("collection")  or "").strip()
+    title_field = (body.get("title_field") or "").strip()
+    date_field  = (body.get("date_field")  or "").strip()
+    auto_sync   = bool(body.get("auto_sync"))
+    if not collection or not title_field:
+        return JSONResponse({"error": "collection and title_field required"},
+                             status_code=400)
+
+    def _validate_and_provision():
+        pb = PBClient()
+        nc = NotionClient()
+        fields = _pb_collection_field_names(pb, collection)
+        if title_field not in fields:
+            raise HTTPException(status_code=400,
+                detail=f"title_field={title_field!r} not on {collection!r}")
+        if date_field and date_field not in fields:
+            raise HTTPException(status_code=400,
+                detail=f"date_field={date_field!r} not on {collection!r}")
+        existing = sync_config_registry.get(collection, pb, fresh=True)
+        if existing is not None:
+            raise HTTPException(status_code=409,
+                detail=f"sync_config row for {collection!r} already exists")
+        notion_db_id = provision_notion_db(
+            pb=pb, nc=nc, collection=collection, title_field=title_field,
+        )
+        pb.create_record("sync_config", {
+            "collection": collection, "notion_db_id": notion_db_id,
+            "enabled": True, "auto_sync": auto_sync,
+            "title_field": title_field, "date_field": date_field,
+            "field_map_overrides": {},
+        })
+        sync_config_registry.invalidate()
+        return notion_db_id
+
+    try:
+        notion_db_id = await asyncio.to_thread(_validate_and_provision)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    asyncio.create_task(_spawn_reconcile_initial(collection))
+    return {"ok": True, "notion_db_id": notion_db_id, "reconcile_started": True}
+
+
+async def _spawn_reconcile_initial(collection: str) -> None:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "/home/dev/phone-bridge/.venv/bin/python",
+            "scripts/reconcile_initial.py", "--only", collection,
+            cwd="/home/dev/phone-bridge",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.wait(), timeout=600)
+    except Exception as e:
+        log.warning("reconcile_initial spawn for %s failed: %s", collection, e)
+
+
+@app.patch("/api/sync/targets/{collection}")
+async def api_sync_targets_patch(collection: str, body: dict | None = None):
+    body = body or {}
+    allowed = {"enabled", "auto_sync", "title_field", "date_field",
+                "field_map_overrides"}
+    patch = {k: v for k, v in body.items() if k in allowed}
+    if not patch:
+        return JSONResponse({"error": "no recognized keys"}, status_code=400)
+
+    def _do():
+        pb = PBClient()
+        rows = pb.list_records("sync_config",
+                                filter=f"collection='{collection}'", sort="")
+        if not rows:
+            raise HTTPException(status_code=404,
+                detail=f"no sync_config for {collection!r}")
+        row_id = rows[0]["id"]
+        if "title_field" in patch or "date_field" in patch:
+            fields = _pb_collection_field_names(pb, collection)
+            tf = patch.get("title_field", rows[0].get("title_field"))
+            df = patch.get("date_field",  rows[0].get("date_field"))
+            if tf and tf not in fields:
+                raise HTTPException(status_code=400,
+                    detail=f"title_field={tf!r} not on {collection!r}")
+            if df and df not in fields:
+                raise HTTPException(status_code=400,
+                    detail=f"date_field={df!r} not on {collection!r}")
+        updated = pb.update_record("sync_config", row_id, patch)
+        sync_config_registry.invalidate()
+        return updated
+
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/sync/targets/{collection}")
+async def api_sync_targets_delete(collection: str):
+    def _do():
+        pb = PBClient()
+        rows = pb.list_records("sync_config",
+                                filter=f"collection='{collection}'", sort="")
+        if not rows:
+            raise HTTPException(status_code=404,
+                detail=f"no sync_config for {collection!r}")
+        notion_db_id = rows[0].get("notion_db_id", "")
+        pb.delete_record("sync_config", rows[0]["id"])
+        sync_config_registry.invalidate()
+        return {"ok": True, "notion_db_id": notion_db_id}
+    try:
+        return await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/sync/registry/export-snapshot")
+async def api_sync_registry_export_snapshot():
+    """Run scripts/dump_sync_registry.py and return the output path."""
+    out_path = "notion_sync/registry.snapshot.yaml"
+    cmd = ["/home/dev/phone-bridge/.venv/bin/python",
+            "scripts/dump_sync_registry.py", "--path", out_path]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, cwd="/home/dev/phone-bridge",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        if proc.returncode != 0:
+            return JSONResponse(
+                {"ok": False, "error": stderr.decode("utf-8", "replace")[:500]},
+                status_code=500,
+            )
+        return {"ok": True, "path": out_path}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 # ---------- REST: nearby POI (for check-in modal) ----------
