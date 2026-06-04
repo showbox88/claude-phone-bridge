@@ -16,6 +16,34 @@ import json as _json
 from typing import Any
 
 
+def _pb_date_to_notion_start(value: Any) -> str:
+    """Convert a PB date/datetime string into the value for Notion's date.start.
+
+    PB stores datetime in ``date`` fields as ``"YYYY-MM-DD HH:MM:SS.fffZ"``. When
+    the HH:MM:SS portion is non-zero we emit a full ISO 8601 string so Notion
+    treats the property as a datetime (``is_datetime=1``); when it's zero we
+    emit ``YYYY-MM-DD`` so Notion keeps it as date-only. Returns "" for empty
+    input.
+
+    Edge case: a real event at exactly 00:00:00 UTC is indistinguishable from
+    a date-only value and will be shown date-only in Notion. The full timestamp
+    still round-trips through PB intact.
+    """
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    s_norm = s.replace("T", " ")
+    parts = s_norm.split(" ", 1)
+    date_part = parts[0]
+    if len(parts) < 2:
+        return date_part
+    time_part = parts[1].rstrip().rstrip("Z").rstrip()
+    hms = time_part.split(".", 1)[0]
+    if not hms or hms == "00:00:00":
+        return date_part
+    return f"{date_part}T{hms}Z"
+
+
 def _rich_text_str(item: dict) -> str:
     """Extract text from a rich_text item, tolerant of request vs response shape.
 
@@ -77,7 +105,8 @@ def pb_field_to_notion_property(value: Any, *,
         if notion_type == "date":
             if not s_value:
                 return {"date": None}
-            return {"date": {"start": s_value.split(" ")[0].split("T")[0]}}
+            start = _pb_date_to_notion_start(s_value)
+            return {"date": {"start": start}} if start else {"date": None}
         if notion_type == "select":
             return {"select": {"name": s_value} if s_value else None}
         if notion_type == "multi_select":
@@ -118,8 +147,8 @@ def pb_field_to_notion_property(value: Any, *,
     if pb_type == "date":
         if not value:
             return {"date": None}
-        date_part = str(value).split(" ")[0].split("T")[0]
-        return {"date": {"start": date_part}}
+        start = _pb_date_to_notion_start(value)
+        return {"date": {"start": start}} if start else {"date": None}
 
     if pb_type == "select":
         if max_select == 1:
