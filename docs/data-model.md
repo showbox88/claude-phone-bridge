@@ -260,6 +260,17 @@ sync_config {
   field_map_overrides  json            // {"NotionColumnName": "pb_field_name"}; default {}
   last_synced_at       date
   last_sync_summary    text
+  title_field          text            // (added 2026-06-04) PB field used as the Notion
+                                       // title column. Required. Seeded by migration
+                                       // 1779465623 (e.g. trips → "title", days → "name").
+  date_field           text            // (added 2026-06-04) PB field used for ordering /
+                                       // fuzzy matching during reconcile. Empty for
+                                       // contacts and locations.
+  auto_sync            bool            // (added 2026-06-04) When true, a PB write via
+                                       // mcp__pb__pb_create / pb_update / pb_delete
+                                       // schedules a 10-second-debounced runner pass
+                                       // for this collection. When false, the row waits
+                                       // for the next cron tick.
 }
 
 sync_global {                          // single row

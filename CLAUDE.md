@@ -68,6 +68,30 @@ tools, in-app chat-session alerts, 90-day cleanup. See
 **[docs/notion-pb-sync.md](docs/notion-pb-sync.md)** for the full
 architecture / data model / flow / runbook.
 
+### Sync registry (where the list of synced tables lives)
+
+As of 2026-06-04 the per-target sync configuration lives entirely in the
+PB `sync_config` table — three new columns (`title_field`, `date_field`,
+`auto_sync`) replace what used to be hardcoded Python dicts in three
+files. To add a new sync target:
+
+1. Create the PB collection (chat with Claude → `pb_create_collection`)
+2. Open Phone Bridge → 同步设置 → click **+ 新增同步表** → pick the new
+   collection, set title_field / auto_sync, hit "创建并同步"
+3. The server auto-creates the matching Notion DB (with pb_id +
+   last_synced_at pipeline columns), inserts the sync_config row, and
+   spawns `reconcile_initial --only <new>`
+
+No code changes required. See
+[`docs/sync-registry-design.md`](docs/sync-registry-design.md) for the
+field-by-field design, the PB→Notion type mapping table, relation
+handling rules, and the REST API reference.
+
+**Disaster-recovery snapshot:** the runtime state of the registry is
+mirrored to `notion_sync/registry.snapshot.yaml`. It's NOT auto-updated
+— after any UI change you care about, run
+`python scripts/dump_sync_registry.py` and commit the diff.
+
 ## Trip data model: stops redesign (shipped 2026-06-03)
 
 `days` was split into a pure container (`days`) + atomic events (`stops`)

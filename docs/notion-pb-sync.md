@@ -438,6 +438,32 @@ Total: ~37 commits, 58 passing tests, ~3000 lines including tests + docs.
 
 ---
 
+## Adding a new sync target
+
+Since 2026-06-04, registering a new sync target is a 2-step user flow,
+not a code change:
+
+1. **Create the PB collection** via the Phone Bridge chat:
+
+   > "Make a PB collection called `<name>` with fields …"
+
+   Claude calls `pb_create_collection`. PB writes a JS migration file
+   that the next deploy will pull back into git.
+
+2. **Register it for sync** via Phone Bridge → 同步设置 → "+ 新增同步表".
+   Pick the new collection, set `title_field`, optionally `date_field`,
+   leave `auto_sync` on (default). Click "创建并同步".
+
+The server auto-provisions a Notion DB matching the PB schema, inserts
+a `sync_config` row, adds the collection name to Sync Activity's select,
+and runs `reconcile_initial --only <new>` in the background.
+
+See [`docs/sync-registry-design.md`](sync-registry-design.md) for the
+mechanism — REST endpoints, PB→Notion type mapping table, relation
+handling, and out-of-scope notes.
+
+---
+
 ## What's NOT in scope (future)
 
 - **Relation field translation** — needs an ID-mapping layer (PB ↔ Notion) for cross-side relation writes.

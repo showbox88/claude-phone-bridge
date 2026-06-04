@@ -32,6 +32,11 @@ from notion_sync.pb_api import PBClient
 # the production workspace). The two trailing entries (stops + journal) were
 # added 2026-06-03 via the stops redesign so a fresh-workspace re-run still
 # bootstraps all 8 targets.
+# After 2026-06-04 the per-target metadata (title_field, date_field,
+# auto_sync) lives in extra columns on sync_config. This bootstrap
+# script does NOT seed those — the migration
+# `1779465623_extend_sync_config.js` does. See
+# docs/sync-registry-design.md.
 SYNC_TARGETS: dict[str, str] = {
     "trips":     "df7ea062-7b18-4c4f-98f1-bfec8258c3db",
     "days":      "13329dea-4f55-4fc8-8e64-6c1ff19353bb",
