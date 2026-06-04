@@ -183,9 +183,36 @@ curl -sS -X PATCH -H "Authorization: $PB_TOKEN" -H "Content-Type: application/js
 
 ---
 
+### Step 6：确保同步被触发
+
+**优先路径(自动)**：用 MCP 工具 `mcp__pb__pb_create` / `pb_update` 写
+PB 时，pb_tools 会自动 schedule 一次 10 秒 debounce 后的 sync，无需
+手动触发。这一次打卡(location + day + stop)的三次 pb 写入会合并
+成每个 collection 一次 `--only X` 的后台 sync，~30 秒内 Notion 全部可见。
+
+**fallback(手动)**：如果你走的是 Step 1-3 里的原始 curl 路径（没用
+MCP `pb_create`，所以 pb_tools 的自动 hook 不会触发），Step 5 反馈完后
+**追加一步**：
+
+通过 MCP：调 `sync_now`（不带 `collection` 参数，locations / days /
+stops 全推）。或 shell：
+
+```bash
+cd /home/dev/phone-bridge && set -a; . ./.env; set +a; \
+  .venv/bin/python -m notion_sync.runner --force-now
+```
+
+sync 失败不影响 Step 5 的反馈——PB 已经落地。告诉用户"已写 PB，但
+Notion 同步失败：<error>，下一次定时会重试"即可，**不要**回滚 PB。
+
+---
+
 ## 四、底线规则
 
-1. **不写 Notion**：Notion 由独立 sync job（`notion_sync.runner`，每天 03:00 ET 自动跑）处理双向同步。打卡完全本地。
+1. **写 PB 完后必须立刻 sync 到 Notion**（Step 6）。原 "不写 Notion" 的设计
+   是为了解耦——保留这个解耦原则（写 PB 时不直接调 Notion API），但作为
+   Step 6 顺手触发独立的 sync runner，让用户立刻在 Notion 看到。单次打卡
+   = 1 次 PB 写入 + 1 次 sync runner 触发。
 2. **不动 Foods / Journal**：除非用户在同一消息里明确要记菜或日记，否则只动 trips / locations / days / **stops**。
 3. **"买水" 模式**：build_location: false 时绝不创建 Location。直接写 Stop（location 字段空），day 仍然要 upsert（散落到 trip='' && date='today' 的 day 上）。
 4. **不重试 401**：token 失效就报告给用户。server.py 后台 refresh 周期 30 分钟，下次自然恢复。

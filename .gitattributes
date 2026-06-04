@@ -1,0 +1,26 @@
+# Force LF line endings in the repo for all text files. Working trees on
+# Windows still see CRLF when they want (git's autocrlf handles that on
+# checkout), but the canonical form in git is always LF. Prevents
+# spurious "every line changed" diffs when a file round-trips through a
+# Windows editor without explicit LF preservation.
+#
+# This rule only affects the index/commit side — it does NOT renormalize
+# files already in the working tree. To clean up existing CRLF files
+# later: `git add --renormalize <path>` (do file-by-file to avoid sweeping
+# changes into a single commit).
+* text=auto eol=lf
+
+# Binaries: explicitly untouched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.gz binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -37,6 +37,67 @@ SERVER_NAME = "pb"
 
 PB_URL      = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090").rstrip("/")
 PB_EMAIL    = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
+
+# ---------------------------------------------------------------------------
+# Auto-sync: after pb_create / pb_update / pb_delete on a sync-target
+# collection, schedule a delayed runner --force-now --only X. Multiple
+# writes within the debounce window collapse into one runner pass per
+# touched collection. Lets check-ins (and any other write surface) feel
+# instantaneous in Notion without flooding the runner.
+# ---------------------------------------------------------------------------
+# Collections that auto-trigger sync. PB write to any of these schedules
+# a sync. Anything else (plans, contacts, foods, claude_memos, etc.)
+# waits for the scheduled cron tick.
+_AUTO_SYNC_COLLECTIONS: set[str] = {
+    "trips", "days", "stops", "locations", "todos", "journal",
+}
+_AUTO_SYNC_DEBOUNCE_SECS = 10.0
+_pending_sync: set[str] = set()
+_sync_task: asyncio.Task | None = None
+
+
+def _schedule_auto_sync(collection: str) -> None:
+    """Add a collection to the pending set and (re-)arm the debounced runner.
+
+    Safe to call from inside tool handlers — never blocks the response.
+    Quietly no-ops outside an asyncio loop (e.g. unit tests).
+    """
+    if collection not in _AUTO_SYNC_COLLECTIONS:
+        return
+    _pending_sync.add(collection)
+    global _sync_task
+    if _sync_task and not _sync_task.done():
+        return     # debounce timer already running; pending set will be read on fire
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return     # no event loop (test context) — silently skip
+    _sync_task = loop.create_task(_run_debounced_sync())
+
+
+async def _run_debounced_sync() -> None:
+    """After the debounce window, snapshot pending collections and run
+    `python -m notion_sync.runner --force-now --only X` for each. Errors
+    are logged but never propagate."""
+    try:
+        await asyncio.sleep(_AUTO_SYNC_DEBOUNCE_SECS)
+    except asyncio.CancelledError:
+        return
+    cols = sorted(_pending_sync)
+    _pending_sync.clear()
+    bridge_root = os.path.dirname(os.path.abspath(__file__))
+    for col in cols:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "/home/dev/phone-bridge/.venv/bin/python", "-m", "notion_sync.runner",
+                "--force-now", "--only", col,
+                cwd=bridge_root,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=300)
+        except Exception as e:
+            log.warning("auto-sync runner failed for %s: %s", col, e)
 PB_PASSWORD = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
 
 
@@ -228,6 +289,7 @@ async def pb_create(args: dict[str, Any]) -> dict[str, Any]:
     try:
         data = await _pb("POST", f"/api/collections/{args['collection']}/records",
                          body=args["data"])
+        _schedule_auto_sync(args["collection"])
         return _ok(data)
     except Exception as e:
         return _err(f"pb_create failed: {e}")
@@ -255,6 +317,7 @@ async def pb_update(args: dict[str, Any]) -> dict[str, Any]:
         data = await _pb("PATCH",
                          f"/api/collections/{args['collection']}/records/{args['id']}",
                          body=args["data"])
+        _schedule_auto_sync(args["collection"])
         return _ok(data)
     except Exception as e:
         return _err(f"pb_update failed: {e}")
@@ -279,6 +342,7 @@ async def pb_update(args: dict[str, Any]) -> dict[str, Any]:
 async def pb_delete(args: dict[str, Any]) -> dict[str, Any]:
     try:
         await _pb("DELETE", f"/api/collections/{args['collection']}/records/{args['id']}")
+        _schedule_auto_sync(args["collection"])
         return _ok({"ok": True, "collection": args["collection"], "deleted": args["id"]})
     except Exception as e:
         return _err(f"pb_delete failed: {e}")
@@ -597,5 +661,12 @@ PROMPT_HINT = (
     "sync_now triggers an immediate sync (use when user says '同步一下'); "
     "sync_pause / sync_resume toggle sync_global.paused. Daily sync still "
     "fires automatically at the configured local hour — these tools are "
-    "for on-demand control."
+    "for on-demand control.\n\n"
+    "AUTO-SYNC: pb_create / pb_update / pb_delete on trips / days / stops / "
+    "locations / todos / journal automatically schedules a debounced sync "
+    "(10s window — multiple quick writes batch into one runner pass per "
+    "touched collection). You don't need to call sync_now manually after "
+    "those writes. Auto-sync does NOT trigger for plans / contacts / foods / "
+    "claude_memos / other PB-only collections — those wait for the next "
+    "scheduled cron (default 03:00 + 15:00 local)."
 )
