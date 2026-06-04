@@ -52,3 +52,36 @@ def test_daylight_savings_us_winter():
     cfg = {"timezone": "America/New_York", "sync_hour_local": 3, "paused": False}
     assert should_run_now(cfg, now_utc=_utc(2026, 1, 15, 8)) is True
     assert should_run_now(cfg, now_utc=_utc(2026, 1, 15, 7)) is False
+
+
+def test_runs_at_either_of_two_hours():
+    # EDT: 03:00 local = 07:00 UTC; 15:00 local = 19:00 UTC. Both fire.
+    cfg = {"timezone": "America/New_York", "sync_hour_local": 3,
+           "sync_hour_local_2": 15, "paused": False}
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 7))  is True
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 19)) is True
+    # Off-hours in between should still skip.
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 12)) is False
+
+
+def test_second_hour_alone_works():
+    # Only sync_hour_local_2 set; the first slot is empty/null.
+    cfg = {"timezone": "America/New_York", "sync_hour_local": "",
+           "sync_hour_local_2": 15, "paused": False}
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 19)) is True
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 7))  is False
+
+
+def test_invalid_second_hour_ignored():
+    # Bogus value in second slot — silently dropped, first hour still wins.
+    cfg = {"timezone": "America/New_York", "sync_hour_local": 3,
+           "sync_hour_local_2": "abc", "paused": False}
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 7))  is True
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 19)) is False
+
+
+def test_paused_overrides_both_hours():
+    cfg = {"timezone": "America/New_York", "sync_hour_local": 3,
+           "sync_hour_local_2": 15, "paused": True}
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 7))  is False
+    assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 19)) is False

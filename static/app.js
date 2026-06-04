@@ -1501,6 +1501,9 @@
       else if (cmd === 'weekly-report') {
         openWeeklyReportModal();
       }
+      else if (cmd === 'sync-settings') {
+        openSyncSettingsModal();
+      }
     });
   });
 
@@ -1827,6 +1830,189 @@
       setWRStatus('生成失败: ' + e.message, true);
     }
   }
+
+  // ---------- Notion sync: header button + settings modal ----------
+  function toast(msg, isError) {
+    let t = document.getElementById('toast');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'toast';
+      t.className = 'toast';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.classList.toggle('toast-error', !!isError);
+    t.classList.add('show');
+    clearTimeout(toast._h);
+    toast._h = setTimeout(() => t.classList.remove('show'), 4500);
+  }
+
+  const syncBtn = document.getElementById('sync-btn');
+  if (syncBtn) {
+    syncBtn.addEventListener('click', async () => {
+      if (syncBtn.dataset.busy === '1') return;
+      syncBtn.dataset.busy = '1';
+      syncBtn.classList.add('spin');
+      const oldTitle = syncBtn.title;
+      syncBtn.title = '同步中…';
+      try {
+        const r = await fetch(apiUrl('/api/sync/now'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          toast(`❌ 同步失败 (${r.status}): ${data.stderr || data.detail || '未知错误'}`, true);
+        } else {
+          const s = data.summary || {};
+          const parts = [];
+          if (s.applied)            parts.push(`applied=${s.applied}`);
+          if (s.conflicts)          parts.push(`conflicts=${s.conflicts}`);
+          if (s.deletes)            parts.push(`deletes=${s.deletes}`);
+          if (s.pending)            parts.push(`pending=${s.pending}`);
+          if (s.decisions_applied)  parts.push(`decisions=${s.decisions_applied}`);
+          if (s.archived_resolved)  parts.push(`archived=${s.archived_resolved}`);
+          toast(parts.length ? `✅ 同步完成: ${parts.join(' / ')}` : '✅ 同步完成: 无变化');
+          // refresh the bell badge in case a Pending row materialized
+          try { checkBell(); } catch (_) {}
+        }
+      } catch (e) {
+        toast('❌ 同步失败: ' + (e.message || e), true);
+      } finally {
+        syncBtn.classList.remove('spin');
+        syncBtn.dataset.busy = '';
+        syncBtn.title = oldTitle;
+      }
+    });
+  }
+
+  async function openSyncSettingsModal() {
+    let m = document.getElementById('ss-modal');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'ss-modal';
+      m.className = 'modal-bg wr-modal hidden';
+      m.innerHTML = `
+        <div class="modal">
+          <div class="modal-head">
+            <span>🔄 同步设置</span>
+            <button class="icon-btn modal-close" type="button">✕</button>
+          </div>
+          <div class="wr-body">
+            <label class="wr-row wr-toggle">
+              <span class="wr-label">暂停同步</span>
+              <input type="checkbox" id="ss-paused">
+            </label>
+            <div class="wr-row">
+              <span class="wr-label">时区</span>
+              <input type="text" id="ss-tz" placeholder="America/New_York" style="flex:1; min-width:0;">
+            </div>
+            <div class="wr-row">
+              <span class="wr-label">同步时刻 1</span>
+              <div class="wr-time">
+                <input type="number" id="ss-h1" min="0" max="23" step="1" style="width:5em;">
+                <span>:00</span>
+              </div>
+            </div>
+            <div class="wr-row">
+              <span class="wr-label">同步时刻 2</span>
+              <div class="wr-time">
+                <input type="number" id="ss-h2" min="0" max="23" step="1" style="width:5em;" placeholder="留空=禁用">
+                <span>:00</span>
+              </div>
+            </div>
+            <div class="wr-row wr-info">
+              <span class="wr-label">上次跑</span>
+              <span id="ss-last">—</span>
+            </div>
+            <div class="wr-actions">
+              <button id="ss-run-now" type="button">立即同步</button>
+              <button id="ss-save" type="button" class="primary">保存</button>
+            </div>
+            <div class="wr-status" id="ss-status"></div>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(m);
+      m.addEventListener('click', () => m.classList.add('hidden'));
+      m.querySelector('.modal').addEventListener('click', (e) => e.stopPropagation());
+      m.querySelector('.modal-close').addEventListener('click', () => m.classList.add('hidden'));
+
+      m.querySelector('#ss-save').addEventListener('click', async () => {
+        const body = {
+          paused:            !!m.querySelector('#ss-paused').checked,
+          timezone:          (m.querySelector('#ss-tz').value || 'America/New_York').trim(),
+          sync_hour_local:   m.querySelector('#ss-h1').value === '' ? null : parseInt(m.querySelector('#ss-h1').value, 10),
+          sync_hour_local_2: m.querySelector('#ss-h2').value === '' ? null : parseInt(m.querySelector('#ss-h2').value, 10),
+        };
+        setSSStatus('保存中…');
+        try {
+          const r = await fetch(apiUrl('/api/settings/notion-sync'), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          if (!r.ok) throw new Error(await r.text());
+          const data = await r.json();
+          fillSyncSettings(data);
+          setSSStatus('已保存 ✓');
+        } catch (e) {
+          setSSStatus('保存失败: ' + e.message, true);
+        }
+      });
+
+      m.querySelector('#ss-run-now').addEventListener('click', async () => {
+        setSSStatus('同步中…');
+        try {
+          const r = await fetch(apiUrl('/api/sync/now'), {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.stderr || data.detail || ('HTTP ' + r.status));
+          const s = data.summary || {};
+          const parts = [];
+          for (const k of ['applied','conflicts','deletes','pending','decisions_applied','archived_resolved']) {
+            if (s[k]) parts.push(`${k}=${s[k]}`);
+          }
+          setSSStatus('同步完成: ' + (parts.join(' / ') || '无变化'));
+          try { checkBell(); } catch (_) {}
+          // refresh last_run_at
+          const fresh = await fetch(apiUrl('/api/settings/notion-sync')).then(x => x.json()).catch(() => null);
+          if (fresh) fillSyncSettings(fresh);
+        } catch (e) {
+          setSSStatus('同步失败: ' + e.message, true);
+        }
+      });
+    }
+    m.classList.remove('hidden');
+    setSSStatus('加载中…');
+    try {
+      const r = await fetch(apiUrl('/api/settings/notion-sync'));
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
+      fillSyncSettings(data);
+      setSSStatus('');
+    } catch (e) {
+      setSSStatus('加载失败: ' + e.message, true);
+    }
+  }
+
+  function fillSyncSettings(data) {
+    document.getElementById('ss-paused').checked = !!data.paused;
+    document.getElementById('ss-tz').value = data.timezone || 'America/New_York';
+    document.getElementById('ss-h1').value = (data.sync_hour_local == null || data.sync_hour_local === '') ? '' : data.sync_hour_local;
+    document.getElementById('ss-h2').value = (data.sync_hour_local_2 == null || data.sync_hour_local_2 === '') ? '' : data.sync_hour_local_2;
+    document.getElementById('ss-last').textContent = data.last_run_at || '—';
+  }
+
+  function setSSStatus(msg, isError) {
+    const el = document.getElementById('ss-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.classList.toggle('error', !!isError);
+  }
+
 
   // ---------- meta load (modes/models) ----------
   async function loadMeta() {

@@ -87,6 +87,7 @@
       <span id="workspace-indicator" class="workspace-indicator">Code</span>
       <button id="model-btn" class="model-pill" type="button"><span id="model-label">默认</span><span class="caret" data-icon="caret" data-icon-size="12"></span></button>
       <button id="notif-btn" class="icon-btn" type="button" title="启用推送通知" data-icon="bell"></button>
+      <button id="sync-btn" class="icon-btn" type="button" title="立即同步 PB ↔ Notion" data-icon="refresh"></button>
       <button id="menu-btn" class="icon-btn" type="button" title="菜单" data-icon="more"></button>
     </div>
   </header>
@@ -96,6 +97,7 @@
     <button data-cmd="cwd-prompt"><span class="ic" data-icon="folder" data-icon-size="16"></span>切换工作目录</button>
     <button data-cmd="usage"><span class="ic" data-icon="chart" data-icon-size="16"></span>查看使用量</button>
     <button data-cmd="weekly-report"><span class="ic" data-icon="calendar" data-icon-size="16"></span>周报设置</button>
+    <button data-cmd="sync-settings"><span class="ic" data-icon="refresh" data-icon-size="16"></span>同步设置</button>
   </div>
 
   <!-- model picker dropdown (positioned below the model button) -->
@@ -233,6 +235,6 @@
 
   <script src="/static/icons.js?v=42"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=42"></script>
+  <script src="/static/app.js?v=43"></script>
 </body>
 </html>

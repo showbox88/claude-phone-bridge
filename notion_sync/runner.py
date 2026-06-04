@@ -76,21 +76,35 @@ def now_iso_datetime() -> str:
 
 
 def should_run_now(sync_global: dict, *, now_utc: datetime | None = None) -> bool:
-    """True iff the local hour in sync_global.timezone == sync_hour_local
-    AND sync_global.paused is False. Returns False if paused or off-hour.
-    Tolerant of missing config (defaults UTC, hour=3).
+    """True iff the local hour in sync_global.timezone matches EITHER
+    `sync_hour_local` or `sync_hour_local_2` AND `paused` is False.
+
+    Returns False if paused, bad timezone, or off-hour. Tolerant of
+    missing config (defaults UTC, hour=3, no second slot).
     """
     if sync_global.get("paused"):
         return False
     tz_name = sync_global.get("timezone") or "UTC"
-    target_hour = int(sync_global.get("sync_hour_local") or 3)
+    target_hours: set[int] = set()
+    for key in ("sync_hour_local", "sync_hour_local_2"):
+        raw = sync_global.get(key)
+        if raw is None or raw == "":
+            continue
+        try:
+            h = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= h <= 23:
+            target_hours.add(h)
+    if not target_hours:
+        target_hours = {3}     # safety default if config is empty
     now = now_utc or datetime.now(timezone.utc)
     try:
         local = now.astimezone(ZoneInfo(tz_name))
     except Exception:
         log_event("bad_timezone", configured=tz_name)
         return False
-    return local.hour == target_hour
+    return local.hour in target_hours
 
 
 def _pb_id_from_notion(page: dict) -> str:

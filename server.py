@@ -1455,6 +1455,140 @@ async def api_meta():
     return {"modes": AVAILABLE_MODES, "models": AVAILABLE_MODELS}
 
 
+# ---------- REST: Notion sync (manual trigger + settings) ----------
+
+def _sync_log_path() -> Path:
+    return Path(__file__).parent / ".bridge_data" / "sync.log"
+
+
+def _latest_run_end_summary() -> dict[str, Any]:
+    """Return the most recent `run_end` JSON line from sync.log, or {}."""
+    p = _sync_log_path()
+    if not p.exists():
+        return {}
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            evt = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if evt.get("event") == "run_end":
+            return {k: v for k, v in evt.items() if k != "event"}
+    return {}
+
+
+@app.post("/api/sync/now")
+async def api_sync_now(body: dict | None = None):
+    """Trigger notion_sync.runner --force-now. Returns the run_end summary."""
+    body = body or {}
+    only = (body.get("collection") or "").strip() or None
+    cmd = [sys.executable, "-m", "notion_sync.runner", "--force-now"]
+    if only:
+        cmd += ["--only", only]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(Path(__file__).parent),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise HTTPException(504, "sync runner timed out after 10 min")
+    except FileNotFoundError as e:
+        raise HTTPException(500, f"runner not found: {e}")
+    summary = _latest_run_end_summary()
+    return {
+        "ok": proc.returncode == 0,
+        "exit_code": proc.returncode,
+        "summary": summary,
+        "stderr": (stderr or b"").decode("utf-8", "replace")[-400:],
+    }
+
+
+def _pb_sync_global() -> dict[str, Any]:
+    """Read the single sync_global row via PBClient. Returns {} if PB
+    creds aren't configured or PB is unreachable."""
+    try:
+        from notion_sync.pb_api import PBClient
+        rows = PBClient().list_records("sync_global", sort="")
+        return rows[0] if rows else {}
+    except Exception:
+        return {}
+
+
+@app.get("/api/settings/notion-sync")
+async def api_settings_notion_sync_get():
+    """Return current sync_global settings (timezone, hours, paused)."""
+    row = await asyncio.to_thread(_pb_sync_global)
+    return {
+        "id": row.get("id", ""),
+        "timezone":          row.get("timezone") or "America/New_York",
+        "sync_hour_local":   row.get("sync_hour_local"),
+        "sync_hour_local_2": row.get("sync_hour_local_2"),
+        "paused":            bool(row.get("paused")),
+        "last_run_at":       row.get("last_run_at") or "",
+    }
+
+
+@app.put("/api/settings/notion-sync")
+async def api_settings_notion_sync_put(body: dict):
+    """Patch sync_global. Accepts timezone (str), sync_hour_local (0..23 or null),
+    sync_hour_local_2 (0..23 or null), paused (bool)."""
+    patch: dict[str, Any] = {}
+    if "timezone" in body:
+        patch["timezone"] = str(body["timezone"])[:64]
+    for key in ("sync_hour_local", "sync_hour_local_2"):
+        if key in body:
+            v = body[key]
+            if v in (None, "", "null"):
+                patch[key] = None
+            else:
+                try:
+                    h = int(v)
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{key} must be 0..23 or null")
+                if not (0 <= h <= 23):
+                    raise HTTPException(400, f"{key} must be 0..23")
+                patch[key] = h
+    if "paused" in body:
+        patch["paused"] = bool(body["paused"])
+    if not patch:
+        raise HTTPException(400, "nothing to update")
+
+    def _apply() -> dict[str, Any]:
+        from notion_sync.pb_api import PBClient
+        pb = PBClient()
+        rows = pb.list_records("sync_global", sort="")
+        if not rows:
+            raise RuntimeError("sync_global has no rows")
+        pb.update_record("sync_global", rows[0]["id"], patch)
+        return pb.list_records("sync_global", sort="")[0]
+
+    try:
+        row = await asyncio.to_thread(_apply)
+    except Exception as e:
+        raise HTTPException(500, f"update failed: {e}")
+    return {
+        "id": row.get("id", ""),
+        "timezone":          row.get("timezone"),
+        "sync_hour_local":   row.get("sync_hour_local"),
+        "sync_hour_local_2": row.get("sync_hour_local_2"),
+        "paused":            bool(row.get("paused")),
+        "last_run_at":       row.get("last_run_at") or "",
+    }
+
+
 # ---------- REST: nearby POI (for check-in modal) ----------
 
 def _haversine_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
