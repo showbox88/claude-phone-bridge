@@ -52,12 +52,6 @@ from notion_sync.transform import (
 )
 
 
-TITLE_FIELD_BY_COLLECTION = {
-    "trips": "title", "plans": "title", "todos": "title", "journal": "title",
-    "days":  "name",  "contacts": "name", "locations": "name", "stops": "name",
-}
-
-
 def now_iso_date() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -350,7 +344,12 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     last_synced_at = cfg_row.get("last_synced_at") or ""
 
     field_types = collection_field_types(pb, collection)
-    title_field = TITLE_FIELD_BY_COLLECTION.get(collection, "title")
+    title_field = cfg_row.get("title_field") or ""
+    if not title_field:
+        raise RuntimeError(
+            f"sync_config[{collection}].title_field is empty — set it via "
+            f"the settings UI or PB admin before this collection can sync"
+        )
 
     notion_db = nc.retrieve_database(notion_db_id)
     notion_schema = notion_db.get("properties", {})
