@@ -486,6 +486,16 @@ def _get_collection(pb: PBClient, name: str) -> dict:
     return pb._http("GET", f"/api/collections/{name}")  # noqa: SLF001
 ```
 
+**CRITICAL — sync pipeline fields:** Before building Notion properties,
+`provision_notion_db` MUST call `ensure_pipeline_fields(pb, collection)`
+to add 3 columns to the PB collection: `notion_id (text, max 100)`,
+`notion_last_edited (date)`, `last_synced_at (date)`, plus a unique
+partial index on `notion_id` (mirroring migration `1779465617`). Without
+these, the runner cannot persist Notion page IDs back to PB after the
+initial create, and every subsequent sync pass duplicates every PB row
+into a fresh Notion page. The function is idempotent — re-running
+against a collection that already has the fields is a no-op.
+
 ### 5.3 PB→Notion property mapping (the authoritative table)
 
 Implement `_pb_field_to_notion_property_definition` as a pure function

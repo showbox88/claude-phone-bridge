@@ -20,6 +20,48 @@ _SYSTEM_FIELD_NAMES = {
 }
 
 
+_PIPELINE_FIELDS = [
+    {"name": "notion_id",          "type": "text", "max": 100},
+    {"name": "notion_last_edited", "type": "date"},
+    {"name": "last_synced_at",     "type": "date"},
+]
+
+
+def ensure_pipeline_fields(pb: PBClient, collection: str) -> dict:
+    """Ensure the 3 sync-pipeline fields + the unique notion_id index
+    exist on the PB collection. Idempotent — skips fields/indexes already
+    present. Returns a small report dict {fields_added: [...], index_added: bool}.
+
+    Without this, the runner can't persist notion_id back to PB after
+    creating a Notion page, so every sync pass duplicates the PB rows
+    on the Notion side.
+    """
+    coll = _get_collection(pb, collection)
+    fields = list(coll.get("fields") or [])
+    existing_names = {f["name"] for f in fields}
+    added: list[str] = []
+    for spec in _PIPELINE_FIELDS:
+        if spec["name"] in existing_names:
+            continue
+        fields.append(dict(spec))
+        added.append(spec["name"])
+
+    indexes = list(coll.get("indexes") or [])
+    idx_name = f"idx_{collection}_notion_id"
+    index_added = False
+    if not any(idx_name in idx for idx in indexes):
+        indexes.append(
+            f"CREATE UNIQUE INDEX {idx_name} ON {collection} (notion_id) "
+            f"WHERE notion_id != ''"
+        )
+        index_added = True
+
+    if added or index_added:
+        pb._http("PATCH", f"/api/collections/{collection}",  # noqa: SLF001
+                  body={"fields": fields, "indexes": indexes})
+    return {"fields_added": added, "index_added": index_added}
+
+
 def provision_notion_db(
     *,
     pb: PBClient,
@@ -42,6 +84,12 @@ def provision_notion_db(
             f"title_field={title_field!r} is not a field on PB "
             f"collection {collection!r}. Fields: {sorted(field_by_name)}"
         )
+
+    # NEW: ensure pipeline fields exist on the PB collection. The
+    # runner needs notion_id/notion_last_edited/last_synced_at to
+    # persist links back to PB after each Notion write. Without these
+    # the runner duplicates rows on every sync.
+    ensure_pipeline_fields(pb, collection)
 
     properties: dict[str, dict] = {snake_to_title(title_field): {"title": {}}}
     targets = load_all(pb, fresh=True)

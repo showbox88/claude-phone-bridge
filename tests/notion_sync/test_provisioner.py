@@ -25,6 +25,16 @@ class FakePB:
                 if c["name"] == name_or_id or c["id"] == name_or_id:
                     return c
             raise RuntimeError(f"collection not found: {name_or_id}")
+        if method == "PATCH" and path.startswith("/api/collections/"):
+            name = path.rsplit("/", 1)[-1]
+            if name not in self.collections:
+                raise RuntimeError(f"collection not found: {name}")
+            # Apply the patch in-place so subsequent GETs see the update.
+            if "fields" in body:
+                self.collections[name]["fields"] = body["fields"]
+            if "indexes" in body:
+                self.collections[name]["indexes"] = body["indexes"]
+            return self.collections[name]
         raise NotImplementedError(method, path)
 
 
@@ -197,3 +207,52 @@ def test_sync_activity_option_appended():
     _, patch = nc.patched_dbs[0]
     names = [o["name"] for o in patch["properties"]["collection"]["select"]["options"]]
     assert "ideas" in names
+
+
+def test_ensure_pipeline_fields_adds_all_three_when_absent():
+    coll = _coll("ideas", [{"name": "title", "type": "text"}])
+    pb = FakePB({"ideas": coll}, [])
+    nc = FakeNotion()
+    provisioner.provision_notion_db(
+        pb=pb, nc=nc, collection="ideas", title_field="title",
+    )
+    field_names = {f["name"] for f in pb.collections["ideas"]["fields"]}
+    assert "notion_id" in field_names
+    assert "notion_last_edited" in field_names
+    assert "last_synced_at" in field_names
+
+
+def test_ensure_pipeline_fields_is_idempotent_when_already_present():
+    coll = _coll("ideas", [
+        {"name": "title", "type": "text"},
+        {"name": "notion_id", "type": "text", "max": 100},
+        {"name": "notion_last_edited", "type": "date"},
+        {"name": "last_synced_at", "type": "date"},
+    ])
+    pb = FakePB({"ideas": coll}, [])
+    nc = FakeNotion()
+    # Call provision (which calls ensure_pipeline_fields). Then directly
+    # call ensure again — both should be no-ops on the fields side.
+    provisioner.provision_notion_db(
+        pb=pb, nc=nc, collection="ideas", title_field="title",
+    )
+    report = provisioner.ensure_pipeline_fields(pb, "ideas")
+    assert report["fields_added"] == []
+    # Pipeline fields stay exactly 3 (not duplicated):
+    pf = [f for f in pb.collections["ideas"]["fields"]
+          if f["name"] in {"notion_id", "notion_last_edited", "last_synced_at"}]
+    assert len(pf) == 3
+
+
+def test_ensure_pipeline_fields_adds_unique_index_on_notion_id():
+    coll = _coll("ideas", [{"name": "title", "type": "text"}])
+    coll["indexes"] = []
+    pb = FakePB({"ideas": coll}, [])
+    nc = FakeNotion()
+    provisioner.provision_notion_db(
+        pb=pb, nc=nc, collection="ideas", title_field="title",
+    )
+    indexes = pb.collections["ideas"]["indexes"]
+    assert any("idx_ideas_notion_id" in idx for idx in indexes)
+    assert any("UNIQUE" in idx.upper() for idx in indexes)
+    assert any("notion_id != ''" in idx for idx in indexes)
