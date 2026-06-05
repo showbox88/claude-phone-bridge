@@ -108,6 +108,11 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
 
     can_translate_relations = relation_lookup is not None and relation_targets is not None
 
+    # Per-row tz hint for datetime fields. Priority: the row's own
+    # `timezone` column (locations/stops/days/expenses/foods) OR `due_tz`
+    # (todos). Empty disables the offset hint (legacy UTC).
+    row_tz = (record.get("timezone") or record.get("due_tz") or "").strip() or None
+
     props: dict = {}
     for pb_name, value in record.items():
         if pb_name in SKIP:
@@ -141,12 +146,21 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
             continue
 
         notion_type = notion_schema[notion_name].get("type")
-        props[notion_name] = pb_field_to_notion_property(
-            value,
-            pb_type=spec["type"],
-            max_select=spec.get("maxSelect", 1),
-            notion_type=notion_type,
-        )
+        if spec["type"] == "date":
+            props[notion_name] = pb_field_to_notion_property(
+                value,
+                pb_type="date",
+                max_select=spec.get("maxSelect", 1),
+                notion_type=notion_type,
+                tz=row_tz,
+            )
+        else:
+            props[notion_name] = pb_field_to_notion_property(
+                value,
+                pb_type=spec["type"],
+                max_select=spec.get("maxSelect", 1),
+                notion_type=notion_type,
+            )
 
     if title_prop_name is not None:
         title_val = record.get(title_field, "") or ""
