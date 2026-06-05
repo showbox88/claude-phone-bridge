@@ -42,6 +42,21 @@ PocketBase 表：`claude_memos`
 > 写花销请 `pb_create('expenses', {...})`，必填 `description / amount /
 > date / type='支出' / expense_category / source / stop(或空) / day /
 > trip(=day.trip)`。详见 [`docs/data-model.md`](../docs/data-model.md) §2.9。
+>
+> **建 expense / todo 时 day/trip 自动挂（同一套流程，agent 主动跑）**：
+> 1. 拿到 `expense.date` 或 `todo.due_date`，先 `pb_search('days',
+>    "date~'YYYY-MM-DD'")` 找当天 day（**注意用 `~` 不是 `=`**，PB date 带时分秒，`=` 永远 0 命中）
+> 2. 找到 → `day_id = day.id`；找不到 → `pb_create('days',
+>    {name:'YYYY-MM-DD', date:'YYYY-MM-DD'})` 新建一个 → `day_id = new.id`
+> 3. 拿 day 后看 `day.trip`：
+>    - 非空 → `trip_id = day.trip`
+>    - 空 → `pb_search('trips', "date_start<='<date>' && date_end>='<date>'")`
+>      看是否落在某 trip 范围；命中 → `pb_update('days', day_id, {trip:trip.id})`
+>      把 day 归到 trip 下，同时 `trip_id = trip.id`
+> 4. 写 expense/todo 时填 `day: day_id, trip: trip_id`（trip_id 可空字符串）
+> 5. **硬约束**：`expense.trip` / `todo.trip` 必须 == 对应 day 的 trip
+> 6. expense 的 `stop` 字段：用户提了具体 stop 才填；todo 的 `stop`
+>    也是用户主动说才填，agent 不要猜
 
 **首次对话或不确定字段时调 `pb_list_collections()` 取实时 schema**——所有 select 字段的当前合法值都在返回里，**不要硬背**。
 
@@ -102,12 +117,19 @@ PocketBase 表：`claude_memos`
   priority: Low | Normal | High
   executor: none | gcal | gtask | other（本期一律填 none）
   tags (multi, maxSelect=5): 工作 / 家人 / 学习 / 生活 / 重要
-  **关系字段**（optional，跟 expense/journal 同模式）：
-  - `stop`: 挂到具体 stop。例 "进寺庙前打电话确认" → stop=该寺庙参观 stop
-  - `day`: 挂到某天容器。例 "Day 1 早上出门前 pack 行李"
-  - `trip`: 挂到整个 trip。例 "出发前办签证、订票、买保险"
-  - 同样的写入侧约定：`todo.trip` 必须等于 `todo.day.trip`（如 day 有 trip）
-  - 没什么 trip 上下文时三个都留空——日常 todo 不需要挂这些
+  **关系字段**（optional，跟 expense 同模式）：
+  - `day` / `trip` — **agent 在建 todo 时自动填**，不要等用户提：
+    1. 如果 todo 有 `due_date`：先 `pb_search('days', "date~'<YYYY-MM-DD>'")`
+       找当天 day（注意用 `~` 不是 `=`，PB date 带时分秒）
+    2. 找到 → `todo.day = day.id`；找不到 → `pb_create('days', {name:'YYYY-MM-DD', date:'YYYY-MM-DD'})` 建一个
+    3. 拿到 day 后：如 `day.trip` 非空，`todo.trip = day.trip`；
+       如 day.trip 空，再 `pb_search('trips', "date_start<='<due_date>' && date_end>='<due_date>'")` 看是否落在某 trip 范围
+       命中 → 同时 `pb_update('days', day.id, {trip})` 把 day 也归到 trip 下 + `todo.trip = trip.id`
+    4. 没 due_date → 三个字段都留空
+    5. 写入侧硬约束：`todo.trip` 必须等于 `todo.day.trip`
+  - `stop` — **只在用户明确说"这是去 X 寺的准备"时填**，agent 不要猜
+    （用户会主动提；猜错了挂错地方反而麻烦）
+  - 这是 expense 同款做法，**建 expense 时也是同一套自动挂 day/trip 流程**
   **icon** (text, 单个 emoji) — **必填，不可留空**。
   - 根据 title / 内容选一个能直观体现这件事的 emoji
   - 一定要填得有内容相关性，不要每条都同一个
