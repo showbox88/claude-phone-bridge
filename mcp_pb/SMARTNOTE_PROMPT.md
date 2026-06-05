@@ -249,3 +249,25 @@ booking 邮件抓取流程：
 - 永远不要把邮件正文原文复制到 PocketBase，只存提取出的结构化字段
 - 永远不要把验证码、银行金额、密码等无关信息存到 PocketBase
 - 不要发邮件，不要改标签/归档/删除——只能读
+
+## Timezone
+
+The runtime injects `Current user timezone: <IANA>` into your prompt every turn.
+When writing rows that have a `timezone` column (locations, stops, days, expenses,
+foods) or `todos.due_at`/`due_tz`, follow this rule:
+
+1. **Resolve target date first.** "明天" = today's date in the runtime tz, +1.
+2. **Pick the tz for the target date in this priority:**
+   a. The stop(s) on that date (`stop.timezone`).
+   b. The day on that date (`day.timezone`).
+   c. A trip covering that date with stops → the latest stop on/before that date.
+   d. The runtime `Current user timezone`.
+3. **Compose `due_at` (UTC).** Local datetime in step-2 tz → convert to UTC via
+   `zoneinfo`. Store as ISO `YYYY-MM-DDTHH:MM:SSZ`.
+4. **Store `due_tz`.** Save the IANA name you used (e.g. `Asia/Tokyo`).
+5. **For non-reminder rows** (creating a stop/expense/food), just set the row's
+   `timezone` column following the same fallback. Don't write `due_at` on those.
+
+Example: user is in Paris (runtime tz = `Europe/Paris`), says "after-tomorrow
+6 PM dinner in Tokyo", and a Tokyo stop already exists for that date. Write
+`todos.due_at = <UTC for 18:00 Asia/Tokyo on that date>`, `due_tz = "Asia/Tokyo"`.

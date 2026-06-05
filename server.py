@@ -188,6 +188,7 @@ class AppState:
     )
     cwd: Path = field(init=False)
     websockets: set[WebSocket] = field(default_factory=set)
+    client_tz: str = ""
     pending: dict[str, asyncio.Future] = field(default_factory=dict)
     # cb_id -> {tool, input}: keeps the metadata so newly-connected clients
     # (e.g. the phone PWA after tapping a push notification) can re-render
@@ -371,6 +372,21 @@ def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
         else:
             kwargs["system_prompt"] = {**kwargs["system_prompt"],
                                        "append": pb_tools.PROMPT_HINT}
+
+    if state.client_tz:
+        tz_note = (
+            f"\n\n[runtime] Current user timezone: {state.client_tz}. "
+            f"When a user says relative times like '明天3点' or 'tomorrow 6pm', "
+            f"resolve them per the rules in SMARTNOTE_PROMPT.md (Timezone section)."
+        )
+        sp = kwargs.get("system_prompt")
+        if isinstance(sp, str):
+            kwargs["system_prompt"] = sp + tz_note
+        elif isinstance(sp, dict):
+            kwargs["system_prompt"] = {
+                **sp,
+                "append": (sp.get("append", "") or "") + tz_note,
+            }
 
     if state.model:
         kwargs["model"] = state.model
@@ -2209,6 +2225,9 @@ async def handle_ws_message(ws: WebSocket, msg: dict) -> None:
         text = (msg.get("text") or "").strip()
         images = msg.get("images") or []
         files = msg.get("files") or []
+        client_tz = (msg.get("client_tz") or "").strip()
+        if client_tz:
+            state.client_tz = client_tz
         if not text and not images and not files:
             return
         await broadcast({
