@@ -486,15 +486,26 @@ def _get_collection(pb: PBClient, name: str) -> dict:
     return pb._http("GET", f"/api/collections/{name}")  # noqa: SLF001
 ```
 
-**CRITICAL — sync pipeline fields:** Before building Notion properties,
-`provision_notion_db` MUST call `ensure_pipeline_fields(pb, collection)`
-to add 3 columns to the PB collection: `notion_id (text, max 100)`,
-`notion_last_edited (date)`, `last_synced_at (date)`, plus a unique
-partial index on `notion_id` (mirroring migration `1779465617`). Without
-these, the runner cannot persist Notion page IDs back to PB after the
-initial create, and every subsequent sync pass duplicates every PB row
-into a fresh Notion page. The function is idempotent — re-running
-against a collection that already has the fields is a no-op.
+**CRITICAL — sync pipeline + autodate fields:** Before building Notion
+properties, `provision_notion_db` MUST call `ensure_pipeline_fields(pb,
+collection)` to add 5 columns to the PB collection:
+- 3 sync-pipeline fields: `notion_id (text, max 100)`,
+  `notion_last_edited (date)`, `last_synced_at (date)`
+- 2 autodate system fields: `created (autodate onCreate=true)`,
+  `updated (autodate onCreate=true, onUpdate=true)`
+
+Plus a unique partial index `idx_<collection>_notion_id ON <collection> (notion_id) WHERE notion_id != ''`.
+
+The pipeline fields let the runner persist Notion page IDs back to PB
+after sync. The autodate fields let `categorize()` detect PB-side
+changes (it compares `pb_row.get("updated")` against
+`sync_config.last_synced_at`). Without `updated`, every row is forever
+classified as NoChange and PB-side edits never propagate to Notion.
+
+Collections created via the PB admin UI get the autodate fields
+automatically; collections created via the `pb_create_collection` MCP
+tool (chat-driven) do NOT — so `ensure_pipeline_fields` is required for
+correctness. The function is idempotent.
 
 ### 5.3 PB→Notion property mapping (the authoritative table)
 

@@ -209,7 +209,7 @@ def test_sync_activity_option_appended():
     assert "ideas" in names
 
 
-def test_ensure_pipeline_fields_adds_all_three_when_absent():
+def test_ensure_pipeline_fields_adds_pipeline_and_autodate_when_absent():
     coll = _coll("ideas", [{"name": "title", "type": "text"}])
     pb = FakePB({"ideas": coll}, [])
     nc = FakeNotion()
@@ -217,9 +217,13 @@ def test_ensure_pipeline_fields_adds_all_three_when_absent():
         pb=pb, nc=nc, collection="ideas", title_field="title",
     )
     field_names = {f["name"] for f in pb.collections["ideas"]["fields"]}
+    # Pipeline fields:
     assert "notion_id" in field_names
     assert "notion_last_edited" in field_names
     assert "last_synced_at" in field_names
+    # Autodate fields (for change detection):
+    assert "created" in field_names
+    assert "updated" in field_names
 
 
 def test_ensure_pipeline_fields_is_idempotent_when_already_present():
@@ -228,6 +232,8 @@ def test_ensure_pipeline_fields_is_idempotent_when_already_present():
         {"name": "notion_id", "type": "text", "max": 100},
         {"name": "notion_last_edited", "type": "date"},
         {"name": "last_synced_at", "type": "date"},
+        {"name": "created", "type": "autodate", "onCreate": True, "onUpdate": False},
+        {"name": "updated", "type": "autodate", "onCreate": True, "onUpdate": True},
     ])
     pb = FakePB({"ideas": coll}, [])
     nc = FakeNotion()
@@ -238,10 +244,30 @@ def test_ensure_pipeline_fields_is_idempotent_when_already_present():
     )
     report = provisioner.ensure_pipeline_fields(pb, "ideas")
     assert report["fields_added"] == []
-    # Pipeline fields stay exactly 3 (not duplicated):
     pf = [f for f in pb.collections["ideas"]["fields"]
-          if f["name"] in {"notion_id", "notion_last_edited", "last_synced_at"}]
-    assert len(pf) == 3
+          if f["name"] in {"notion_id", "notion_last_edited", "last_synced_at",
+                            "created", "updated"}]
+    assert len(pf) == 5
+
+
+def test_ensure_pipeline_fields_adds_only_missing_autodate_when_pipeline_present():
+    coll = _coll("ideas", [
+        {"name": "title", "type": "text"},
+        {"name": "notion_id", "type": "text", "max": 100},
+        {"name": "notion_last_edited", "type": "date"},
+        {"name": "last_synced_at", "type": "date"},
+        # NO created/updated
+    ])
+    pb = FakePB({"ideas": coll}, [])
+    report = provisioner.ensure_pipeline_fields(pb, "ideas")
+    assert set(report["fields_added"]) == {"created", "updated"}
+    field_names = {f["name"] for f in pb.collections["ideas"]["fields"]}
+    assert "created" in field_names
+    assert "updated" in field_names
+    # And the existing pipeline fields are still there exactly once each:
+    pipeline = [f for f in pb.collections["ideas"]["fields"]
+                if f["name"] in {"notion_id", "notion_last_edited", "last_synced_at"}]
+    assert len(pipeline) == 3
 
 
 def test_ensure_pipeline_fields_adds_unique_index_on_notion_id():

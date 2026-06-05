@@ -27,20 +27,33 @@ _PIPELINE_FIELDS = [
 ]
 
 
-def ensure_pipeline_fields(pb: PBClient, collection: str) -> dict:
-    """Ensure the 3 sync-pipeline fields + the unique notion_id index
-    exist on the PB collection. Idempotent — skips fields/indexes already
-    present. Returns a small report dict {fields_added: [...], index_added: bool}.
+_AUTODATE_FIELDS = [
+    {"name": "created", "type": "autodate", "onCreate": True, "onUpdate": False},
+    {"name": "updated", "type": "autodate", "onCreate": True, "onUpdate": True},
+]
 
-    Without this, the runner can't persist notion_id back to PB after
-    creating a Notion page, so every sync pass duplicates the PB rows
-    on the Notion side.
+
+def ensure_pipeline_fields(pb: PBClient, collection: str) -> dict:
+    """Ensure the 3 sync-pipeline fields + the 2 autodate system fields
+    + the unique notion_id index exist on the PB collection. Idempotent.
+    Returns {"fields_added": [...], "index_added": bool}.
+
+    Pipeline fields (for sync state):
+      notion_id (text max 100), notion_last_edited (date), last_synced_at (date)
+
+    Autodate fields (for change detection):
+      created (autodate onCreate), updated (autodate onCreate+onUpdate)
+
+    Without `updated`, the runner's categorize() can't detect PB-side
+    changes for collections created via pb_create_collection MCP tool —
+    every row would be classified as NoChange forever. Collections created
+    via the PB admin UI already have these fields.
     """
     coll = _get_collection(pb, collection)
     fields = list(coll.get("fields") or [])
     existing_names = {f["name"] for f in fields}
     added: list[str] = []
-    for spec in _PIPELINE_FIELDS:
+    for spec in (*_AUTODATE_FIELDS, *_PIPELINE_FIELDS):
         if spec["name"] in existing_names:
             continue
         fields.append(dict(spec))
