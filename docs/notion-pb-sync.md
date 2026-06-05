@@ -454,9 +454,21 @@ not a code change:
    Pick the new collection, set `title_field`, optionally `date_field`,
    leave `auto_sync` on (default). Click "创建并同步".
 
-The server auto-provisions a Notion DB matching the PB schema, inserts
-a `sync_config` row, adds the collection name to Sync Activity's select,
-and runs `reconcile_initial --only <new>` in the background.
+The server, in one POST, does ALL of:
+
+- **Patches the PB collection** to add 5 fields + a unique index, idempotently:
+  - sync-pipeline: `notion_id (text 100)`, `notion_last_edited (date)`, `last_synced_at (date)`
+  - autodate system: `created (autodate onCreate)`, `updated (autodate onCreate+onUpdate)`
+  - `UNIQUE INDEX idx_<name>_notion_id ON <name>(notion_id) WHERE notion_id != ''`
+- **Creates the Notion DB** under `NOTION_SYNC_PARENT_PAGE_ID`, inferring column types from the PB schema (text → rich_text, select → select with options copied, etc.), plus the `pb_id` and `last_synced_at` pipeline columns.
+- **Inserts the `sync_config` row** with collection / notion_db_id / title_field / date_field / auto_sync.
+- **Adds the collection name** to the Sync Activity DB's `collection` select.
+- **Spawns `reconcile_initial --only <new>`** as a background subprocess; first PB rows land in Notion within ~10–30 seconds.
+
+Two non-obvious behaviors worth knowing:
+
+- **PB collection auto-patching is required, not cosmetic.** PB collections created via the `pb_create_collection` MCP tool do NOT get `created`/`updated` autodate fields the way the PB admin UI builds them. Without `updated` on the PB row, the runner's `categorize()` can never detect PB-side changes (`pb_row.get("updated")` returns `None` → `pb_changed` is always False → every row is `NoChange` forever). The provisioner closes that gap so collections registered via chat-then-UI work the same as the original 8 migration-built collections.
+- **Notion auto-creates missing select options on write.** If you later add a new value to a PB select (e.g. add `"电子"` to a `category` field), Notion's matching column does NOT need a separate schema update — when the runner pushes a page property with an unknown select name, Notion's API auto-creates the option (with a random color). So the flow "add PB select option → change a row → next sync" just works for both new and existing sync targets.
 
 See [`docs/sync-registry-design.md`](sync-registry-design.md) for the
 mechanism — REST endpoints, PB→Notion type mapping table, relation

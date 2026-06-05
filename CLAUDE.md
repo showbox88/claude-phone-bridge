@@ -78,11 +78,30 @@ files. To add a new sync target:
 1. Create the PB collection (chat with Claude → `pb_create_collection`)
 2. Open Phone Bridge → 同步设置 → click **+ 新增同步表** → pick the new
    collection, set title_field / auto_sync, hit "创建并同步"
-3. The server auto-creates the matching Notion DB (with pb_id +
-   last_synced_at pipeline columns), inserts the sync_config row, and
-   spawns `reconcile_initial --only <new>`
+3. The server, in one POST, does ALL of:
+   - Adds 5 columns + a unique index to the PB collection (idempotent):
+     - **Pipeline:** `notion_id (text 100)`, `notion_last_edited (date)`, `last_synced_at (date)`
+     - **Autodate (system):** `created (autodate onCreate)`, `updated (autodate onCreate+onUpdate)`
+     - **Index:** `UNIQUE INDEX idx_<name>_notion_id ON <name>(notion_id) WHERE notion_id != ''`
+   - Creates the matching Notion DB (columns inferred from PB schema, plus `pb_id` and `last_synced_at` pipeline columns)
+   - Inserts the `sync_config` row with title_field / date_field / auto_sync
+   - Adds the collection name to Sync Activity's `collection` select
+   - Spawns `reconcile_initial --only <new>` in the background
 
-No code changes required. See
+The pipeline + autodate field auto-add is **critical**: `pb_create_collection`
+(MCP tool used by chat) does NOT add `created`/`updated` autodate the way PB
+admin UI does, and without `updated` the runner's `categorize()` can never
+detect PB-side changes (every row is forever `NoChange`). The provisioner
+fills this gap so collections registered via chat-then-UI work the same as
+collections built through migrations.
+
+**Adding new PB select options:** if you add a value to a PB select
+field (e.g. add "电子" to a `category`), Notion's matching column does
+NOT have to be updated manually — Notion's API auto-creates missing
+select options when the runner writes a page with a new value. So
+the flow "add PB select option → change a row → next sync" just works.
+
+No code changes required for new sync targets. See
 [`docs/sync-registry-design.md`](docs/sync-registry-design.md) for the
 field-by-field design, the PB→Notion type mapping table, relation
 handling rules, and the REST API reference.

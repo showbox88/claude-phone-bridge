@@ -4,13 +4,13 @@
 #   python scripts/dump_sync_registry.py
 # and commit the diff so disaster-recovery git can rebuild PB.
 
-generated_at: "2026-06-04T22:34:28Z"
+generated_at: "2026-06-05T00:19:03Z"
 sync_global:
   timezone: America/New_York
   sync_hour_local: 3
   sync_hour_local_2: 15
   paused: false
-  last_run_at: "2026-06-04 21:20:00.536Z"
+  last_run_at: "2026-06-05 00:13:43.083Z"
 sync_targets:
   - collection: contacts
     notion_db_id: e304a6c3-4771-4c69-9ffc-97a672a1ac0c
@@ -19,7 +19,7 @@ sync_targets:
     title_field: name
     date_field: ""
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:53.442Z"
+    last_synced_at: "2026-06-04 23:57:04.145Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: days
     notion_db_id: 13329dea-4f55-4fc8-8e64-6c1ff19353bb
@@ -28,8 +28,8 @@ sync_targets:
     title_field: name
     date_field: date
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:49.776Z"
-    last_sync_summary: "runner: applied=1 conflicts=0 deletes=0"
+    last_synced_at: "2026-06-04 23:56:55.004Z"
+    last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: journal
     notion_db_id: ccc3b239-682d-47a1-a20e-e33b3c8fae44
     enabled: true
@@ -37,7 +37,7 @@ sync_targets:
     title_field: title
     date_field: date
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:20:00.535Z"
+    last_synced_at: "2026-06-04 23:57:11.221Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: locations
     notion_db_id: 257c34c1-ac50-455d-9c8a-8d810de5c1e5
@@ -46,7 +46,7 @@ sync_targets:
     title_field: name
     date_field: ""
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:55.515Z"
+    last_synced_at: "2026-06-04 23:57:07.098Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: plans
     notion_db_id: c951c7a9-a8f5-4ffd-aea2-1244e437ae46
@@ -55,7 +55,7 @@ sync_targets:
     title_field: title
     date_field: target_date
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:48.709Z"
+    last_synced_at: "2026-06-04 23:56:59.893Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: stops
     notion_db_id: 15bb0429-a026-48b4-96f8-4447d5060ee3
@@ -64,8 +64,8 @@ sync_targets:
     title_field: name
     date_field: date
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:58.538Z"
-    last_sync_summary: "runner: applied=1 conflicts=0 deletes=0"
+    last_synced_at: "2026-06-04 23:57:09.221Z"
+    last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: todos
     notion_db_id: 5d4e3f93-cf13-4707-97c5-59b38940baac
     enabled: true
@@ -73,7 +73,7 @@ sync_targets:
     title_field: title
     date_field: due_date
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:51.506Z"
+    last_synced_at: "2026-06-04 23:57:02.191Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
   - collection: trips
     notion_db_id: df7ea062-7b18-4c4f-98f1-bfec8258c3db
@@ -82,5 +82,5 @@ sync_targets:
     title_field: title
     date_field: date_start
     field_map_overrides: {}
-    last_synced_at: "2026-06-04 21:19:43.721Z"
+    last_synced_at: "2026-06-04 23:56:52.610Z"
     last_sync_summary: "runner: applied=0 conflicts=0 deletes=0"
