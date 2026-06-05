@@ -102,6 +102,12 @@ PocketBase 表：`claude_memos`
   priority: Low | Normal | High
   executor: none | gcal | gtask | other（本期一律填 none）
   tags (multi, maxSelect=5): 工作 / 家人 / 学习 / 生活 / 重要
+  **icon** (text, 单个 emoji)：写新 todo 时必填一个能体现内容的 emoji。
+  例：🚗 车辆 / 🏠 房产 / 📧 邮件 / 💰 金融 / 📅 提醒 / 🛒 购物 /
+  ✈️ 旅行 / 🤝 见面 / 🔄 续期 / ⏰ 健康 / 🤖 自动化 / 🔧 编码。
+  **title 字段不要带 emoji 前缀**——emoji 走 icon 字段，title 是纯文字。
+  Notion 端 page icon 由 sync 从 PB.icon 自动应用。如果实在想不到合适
+  的，留空——sync 会按 status 默认（Pending=📌, Done=✅, Cancelled=❌）。
 
 `claude_memos`:
   category: 偏好约定 | 项目状态 | 决策结论 | 待办线索 | 技术细节 | 其他

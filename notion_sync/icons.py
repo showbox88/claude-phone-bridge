@@ -4,14 +4,58 @@ Day pages get 📅, Trip pages get ✈️, Stop pages get an emoji derived from
 their categories field with locked priority order. Categories repurpose
 several emoji previously used as Day-level icons because semantic
 richness belongs at the stop level, not the day container.
+
+Todo pages preserve any leading emoji the user manually put in the title
+(via `strip_leading_emoji`) — that emoji becomes the page icon and the
+PB title is stripped of it. When the title has no leading emoji, fall
+back to a status-based default. Every todo must end up with an icon —
+no empty case.
 """
 from __future__ import annotations
+
+import re
 
 
 DAY_ICON_EMOJI = "📅"
 TRIP_ICON_EMOJI = "✈️"
 STOP_DEFAULT_EMOJI = "📍"
 EXPENSE_DEFAULT_EMOJI = "💸"
+TODO_DEFAULT_EMOJI = "📌"
+
+# Todo status → fallback emoji when no leading emoji in title.
+TODO_STATUS_EMOJI: dict[str, str] = {
+    "Pending":   "📌",
+    "Done":      "✅",
+    "Cancelled": "❌",
+}
+
+# Match a leading emoji (possibly with variation selector / ZWJ sequence)
+# at the start of a title. Covers the Supplementary Multilingual Plane
+# range used by most pictographs (U+1F000–U+1FFFF) and the BMP Misc
+# Symbols + Dingbats blocks (U+2600–U+27BF, U+2300–U+23FF for keycap-style).
+_EMOJI_PATTERN = re.compile(
+    r"^("
+    r"[\U0001F000-\U0001FFFF⌀-➿⬀-⯿]"
+    r"[️‍]*"
+    r"(?:[\U0001F000-\U0001FFFF⌀-➿⬀-⯿][️‍]*)*"
+    r")\s*"
+)
+
+
+def strip_leading_emoji(title: str) -> tuple[str, str]:
+    """Return (clean_title, leading_emoji) — emoji is "" when none.
+
+    Leading whitespace and separators after the emoji are removed; the
+    rest of the title is returned verbatim.
+    """
+    if not title:
+        return title, ""
+    m = _EMOJI_PATTERN.match(title)
+    if not m:
+        return title, ""
+    emoji = m.group(1)
+    rest = title[m.end():].lstrip(" ·—-—　")
+    return rest, emoji
 
 # Ordered most-specific → most-generic. First match wins when a stop has
 # multiple categories. Keep in sync with CHECKIN.md's `categories` enum.
@@ -73,6 +117,26 @@ def icon_for_stop(categories) -> dict:
     return _emoji(STOP_DEFAULT_EMOJI)
 
 
+def icon_for_todo(record: dict) -> dict:
+    """Notion icon spec for a Todo page.
+
+    1. If `record.icon` is set, use it (writer-side preferred path).
+    2. Otherwise, if the title starts with a leading emoji (legacy /
+       agent entry), reuse that emoji.
+    3. Otherwise pick from `TODO_STATUS_EMOJI` by `status`.
+    4. Default 📌 when nothing matches.
+    """
+    explicit = (record.get("icon") or "").strip()
+    if explicit:
+        return _emoji(explicit)
+    title = record.get("title") or ""
+    _, leading = strip_leading_emoji(title)
+    if leading:
+        return _emoji(leading)
+    status = record.get("status") or ""
+    return _emoji(TODO_STATUS_EMOJI.get(status, TODO_DEFAULT_EMOJI))
+
+
 def icon_for_expense(expense_category) -> dict:
     """Notion icon spec for an Expense page based on its expense_category.
 
@@ -95,4 +159,6 @@ def icon_for(collection: str, row: dict) -> dict | None:
         return icon_for_stop(row.get("categories"))
     if collection == "expenses":
         return icon_for_expense(row.get("expense_category"))
+    if collection == "todos":
+        return icon_for_todo(row)
     return None
