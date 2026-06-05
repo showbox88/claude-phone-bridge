@@ -118,7 +118,7 @@ days {
   weather                text     // free-form: "晴", "雨后转晴"
   note                   text     // daily summary one-liner
   content                editor   // long-form day text
-  trip                   relation→trips (single)
+  trip                   relation→trips (single, OPTIONAL — relaxed in migration 1779465625)
   photos                 (whatever the existing photos field was — preserved)
   notion_id              text (unique-when-non-empty)
   notion_last_edited     date
@@ -149,10 +149,9 @@ stops {
   checkin                date     // actual arrival time (datetime)
   categories             select(maxSelect=8)
                          [打卡, 酒店, 餐厅, 购物, 体验, 交通, 笔记, 消费]
-  amount                 number
-  currency               select(1) [JPY, EUR, USD, CNY, 其他]
-  rate                   number   // 1 unit foreign ≈ N USD
-  amount_usd             number
+  // amount/currency/rate/amount_usd REMOVED in migration 1779465628 —
+  // money fields moved to `expenses` collection (see §2.9). A stop can have
+  // 0..N expenses linked via expense.stop.
   note                   text     // short comment ("汤太咸")
   actual_lat             number
   actual_lng             number
@@ -249,6 +248,68 @@ Chinese UI. Don't translate the stored value.
 `plans` and `todos` are synced but not central to trip flow. Trips link
 to plans (`trip.related_plan`); todos are independent. Schemas are in
 migrations 8 and 13.
+
+### 2.9 `expenses` (new in migration 1779465626 — replaces `transactions`)
+
+Money child of stops/days/trips. The legacy `transactions` collection
+(migration 11) was dropped in migration 1779465627; its 11 rows migrated
+here via `scripts/migrate_transactions_to_expenses.py`. The 4 money
+fields previously on `stops` (amount/currency/rate/amount_usd) were
+dropped in migration 1779465628; their data migrated via
+`scripts/migrate_stops_money_to_expenses.py`.
+
+```
+expenses {
+  id                     text
+  description            text required, max 500
+  amount                 number       // in `currency`; refunds stored negative
+  currency               select(1) [USD, JPY, EUR, CNY, 其他]
+  rate                   number       // 1 unit foreign ≈ N USD; empty for USD
+  amount_usd             number       // writer-side auto-filled (= amount if USD, else amount × rate)
+  date                   date
+  type                   select(1) [支出, 退款]
+  expense_category       select(1) [旅行, 订阅服务, 娱乐, 交通, 购物/日用,
+                                    餐饮, 门票, 住宿, 代付, 其他]
+  card                   select(1) [Chase Sapphire Preferred (7675)]
+  confirmation           text         // Gmail receipt dedup key (unique-when-non-empty)
+  source                 select(1) [手动, Gmail, Agent]
+  stop                   relation→stops    (single, optional)
+  day                    relation→days     (single, optional)
+  trip                   relation→trips    (single, optional, denormalized = day.trip)
+  notion_id              text (unique-when-non-empty)
+  notion_last_edited     date
+  last_synced_at         date
+  created                autodate
+  updated                autodate
+}
+
+indexes:
+  CREATE INDEX idx_expenses_date     ON expenses (date)
+  CREATE INDEX idx_expenses_category ON expenses (expense_category)
+  CREATE INDEX idx_expenses_stop     ON expenses (stop)
+  CREATE INDEX idx_expenses_day      ON expenses (day)
+  CREATE INDEX idx_expenses_trip     ON expenses (trip)
+  CREATE UNIQUE INDEX idx_expenses_confirmation ON expenses (confirmation) WHERE confirmation != ''
+  CREATE UNIQUE INDEX idx_expenses_notion_id    ON expenses (notion_id)    WHERE notion_id != ''
+```
+
+**Conventions** (enforced by writer, NOT by PB):
+- `amount_usd` auto-filled at write time. USD rows: `amount_usd = amount`,
+  `rate = empty/0`. Foreign rows: `amount_usd = amount × rate`.
+- Refunds (`type='退款'`) stored with `amount < 0` so `sum(amount_usd)` is
+  net spend without a CASE branch.
+- `expense.trip == expense.day.trip` when `day.trip` is set. If a day's
+  trip changes, all expenses under it must be cascaded by the writer
+  (no PB hook today).
+- Relations (stop/day/trip) are PB-only — sync (when wired) ignores them
+  per §8.1.
+
+**Use cases**:
+- One stop can hold N expenses (park visit → 门票 + 冰淇淋 + 水)
+- Daily expenses without a trip: `expense.day` set to today's day row
+  (which has `trip=empty`); `expense.trip` also empty
+- Heatmap / weekly / monthly / yearly summaries: group by `date` / `expense_category`
+- Trip totals: `sum where trip = T`; trip-vs-daily compare: `trip is null` filter
 
 ### 2.8 Meta collections (PB-only, not synced)
 

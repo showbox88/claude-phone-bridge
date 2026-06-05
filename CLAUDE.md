@@ -68,6 +68,24 @@ tools, in-app chat-session alerts, 90-day cleanup. See
 **[docs/notion-pb-sync.md](docs/notion-pb-sync.md)** for the full
 architecture / data model / flow / runbook.
 
+### Expenses redesign (2026-06-05)
+
+`transactions` was reshaped into `expenses` — a child table of
+`stops`/`days`/`trips`. A stop can hold N expenses (公园 visit = 门票 +
+冰淇淋 + 水); daily expenses w/o a trip just hang off the day with
+`expense.stop=empty`, `expense.day=今天`. `days.trip` is now optional
+(为日常容器). All 11 old transactions and 6 money-bearing stops were
+migrated; 4 "代付 Monica" rows auto-classified to `expense_category=代付`.
+
+The runtime expects writer-side to: auto-fill `amount_usd`
+(= amount for USD, = amount × rate otherwise), store refunds as negative
+amount, and keep `expense.trip = expense.day.trip` in sync (denormalized).
+
+See **[docs/data-model.md §2.9](docs/data-model.md)** for the schema and
+**[docs/superpowers/specs/2026-06-05-expenses-redesign-design.md](docs/superpowers/specs/2026-06-05-expenses-redesign-design.md)**
+for the design rationale. Sync wiring (add expenses to sync_config via
+the 同步设置 UI) is a separate follow-up.
+
 ### Sync registry (where the list of synced tables lives)
 
 As of 2026-06-04 the per-target sync configuration lives entirely in the

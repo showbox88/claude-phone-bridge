@@ -5,6 +5,16 @@
 
 ---
 
+## 2026-06-05 — Expenses redesign（transactions → expenses，stops 的子表）
+
+- **背景**：原本 `transactions`（migration 11）和 `stops` 都能记金额——日常消费走 transactions，旅行消费挂在 stop.amount。两个口子，做月度汇总/年报/旅游 vs 日常对比时数据是分裂的。同时一次 visit 可能多笔花销（公园 = 门票 + 冰淇淋 + 水），单字段 stop.amount 表达不了。
+- **改动**：把 `transactions` 重塑为 `expenses`，做成 stops/days/trips 的子表。一个 stop 可有 N 个 expense；日常 expense 不挂 stop（stop=空，day=今天）。
+- **新增字段**：在原 transactions 基础上加 `stop`/`day`/`trip` relation + `currency`/`rate`/`amount_usd`（沿用 stops 既有外币算法）+ `source` 新增 `Agent` 值。`category` 改名 `expense_category`，扩展为 10 个值（新增"门票"、"住宿"、"代付"、"其他"）。
+- **约定**：`amount_usd` 由写入侧自动算（USD 行 = amount；外币 = amount × rate）；退款（type=退款）amount 存负数，sum 直接得净支出；`expense.trip = expense.day.trip`（denormalized，跟 stops 现行做法一致）。
+- **Migrations**：1779465625（days.trip 改 optional——日常 day 可无 trip）+ 1779465626（create expenses）+ 1779465627（drop transactions，safety-gated）+ 1779465628（drop stops 4 个金额字段，safety-gated）+ 数据迁移脚本 `scripts/migrate_transactions_to_expenses.py` + `scripts/migrate_stops_money_to_expenses.py`。
+- **数据保留**：11 行老 transactions 全数迁过来（4 笔 "代付 Monica" 自动归类 `expense_category=代付`），脚本按日期自动建/找 day 容器并回填 trip；6 个 amount>0 的 stop 自动 fan 出 6 条 expense 挂回；4 笔今天的测试 stop（坐火车/冰淇淋/winic tech/Ross）note "测试数据，迟点删除"完整保留。每阶段前 `notion_sync.backup` 落盘。
+- **下一步**（独立 PR）：把 expenses 加进 sync registry（前端"+ 新增同步表"一键搞定）、改 CHECKIN.md / SMARTNOTE_PROMPT.md / 前端，让 agent 不再写 stop.amount，改为建 expense 挂 stop。
+
 ## 2026-06 — Trip 数据模型 stops redesign
 
 - **背景**：原本 `days` 既是"日级容器"又是"事件记录"——一个真实日历日里发生 N 件事（吃饭、打车、买票、住宿），就得建 N 条 day 行，时间维度被压扁。Notion 和 PB 都不舒服。
