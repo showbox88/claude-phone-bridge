@@ -102,6 +102,12 @@ PocketBase 表：`claude_memos`
   priority: Low | Normal | High
   executor: none | gcal | gtask | other（本期一律填 none）
   tags (multi, maxSelect=5): 工作 / 家人 / 学习 / 生活 / 重要
+  **关系字段**（optional，跟 expense/journal 同模式）：
+  - `stop`: 挂到具体 stop。例 "进寺庙前打电话确认" → stop=该寺庙参观 stop
+  - `day`: 挂到某天容器。例 "Day 1 早上出门前 pack 行李"
+  - `trip`: 挂到整个 trip。例 "出发前办签证、订票、买保险"
+  - 同样的写入侧约定：`todo.trip` 必须等于 `todo.day.trip`（如 day 有 trip）
+  - 没什么 trip 上下文时三个都留空——日常 todo 不需要挂这些
   **icon** (text, 单个 emoji) — **必填，不可留空**。
   - 根据 title / 内容选一个能直观体现这件事的 emoji
   - 一定要填得有内容相关性，不要每条都同一个

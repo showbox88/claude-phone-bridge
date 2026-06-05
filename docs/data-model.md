@@ -246,8 +246,14 @@ Chinese UI. Don't translate the stored value.
 ### 2.7 `plans` / `todos`
 
 `plans` and `todos` are synced but not central to trip flow. Trips link
-to plans (`trip.related_plan`); todos are independent. Schemas are in
-migrations 8 and 13.
+to plans (`trip.related_plan`); todos can attach to a `stop` / `day` /
+`trip` (all optional, added in migration 1779465630) the same way
+expenses do, so a checklist like "pre-trip prep" or "before visiting
+the temple" can hang off the relevant container. Same writer-side
+convention: `todo.trip` mirrors `todo.day.trip` when day has a trip.
+
+Other todo fields are in migrations 8/13 + 1779465629 (the `icon`
+text field that carries the Notion page emoji).
 
 ### 2.9 `expenses` (new in migration 1779465626 — replaces `transactions`)
 
