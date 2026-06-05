@@ -160,3 +160,50 @@ def test_notion_type_select_unknown_falls_back():
     # Unknown notion_type → defensive fallback to rich_text.
     out = pb_field_to_notion_property("x", pb_type="text", notion_type="weird_type")
     assert out == {"rich_text": [{"type": "text", "text": {"content": "x"}}]}
+
+
+def test_pb_date_to_notion_start_emits_offset_when_tz_given():
+    from notion_sync.codec import _pb_date_to_notion_start
+    # 2026-06-08 09:00 UTC in Asia/Tokyo (UTC+9) -> 18:00 local
+    got = _pb_date_to_notion_start("2026-06-08 09:00:00.000Z", tz="Asia/Tokyo")
+    assert got == "2026-06-08T18:00:00+09:00"
+
+
+def test_pb_date_to_notion_start_no_tz_keeps_legacy_utc_z_format():
+    from notion_sync.codec import _pb_date_to_notion_start
+    got = _pb_date_to_notion_start("2026-06-08 09:00:00.000Z")
+    assert got == "2026-06-08T09:00:00Z"
+
+
+def test_pb_date_to_notion_start_date_only_passes_through():
+    from notion_sync.codec import _pb_date_to_notion_start
+    assert _pb_date_to_notion_start("2026-06-08") == "2026-06-08"
+    assert _pb_date_to_notion_start("2026-06-08", tz="Asia/Tokyo") == "2026-06-08"
+
+
+def test_pb_date_to_notion_start_dst_paris_winter():
+    from notion_sync.codec import _pb_date_to_notion_start
+    # 2026-01-15 12:00 UTC in Europe/Paris (CET, UTC+1) -> 13:00 local
+    got = _pb_date_to_notion_start("2026-01-15 12:00:00.000Z", tz="Europe/Paris")
+    assert got == "2026-01-15T13:00:00+01:00"
+
+
+def test_pb_date_to_notion_start_dst_paris_summer():
+    from notion_sync.codec import _pb_date_to_notion_start
+    # 2026-06-15 12:00 UTC in Europe/Paris (CEST, UTC+2) -> 14:00 local
+    got = _pb_date_to_notion_start("2026-06-15 12:00:00.000Z", tz="Europe/Paris")
+    assert got == "2026-06-15T14:00:00+02:00"
+
+
+def test_pb_date_to_notion_start_invalid_tz_falls_back_to_utc():
+    from notion_sync.codec import _pb_date_to_notion_start
+    got = _pb_date_to_notion_start("2026-06-08 09:00:00.000Z", tz="Not/AReal_Zone")
+    assert got == "2026-06-08T09:00:00Z"
+
+
+def test_pb_field_to_notion_property_date_with_tz_hint():
+    from notion_sync.codec import pb_field_to_notion_property
+    got = pb_field_to_notion_property("2026-06-08 09:00:00.000Z",
+                                       pb_type="date", notion_type="date",
+                                       tz="Asia/Tokyo")
+    assert got == {"date": {"start": "2026-06-08T18:00:00+09:00"}}

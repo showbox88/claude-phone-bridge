@@ -16,14 +16,17 @@ import json as _json
 from typing import Any
 
 
-def _pb_date_to_notion_start(value: Any) -> str:
+def _pb_date_to_notion_start(value: Any, *, tz: str | None = None) -> str:
     """Convert a PB date/datetime string into the value for Notion's date.start.
 
     PB stores datetime in ``date`` fields as ``"YYYY-MM-DD HH:MM:SS.fffZ"``. When
     the HH:MM:SS portion is non-zero we emit a full ISO 8601 string so Notion
-    treats the property as a datetime (``is_datetime=1``); when it's zero we
-    emit ``YYYY-MM-DD`` so Notion keeps it as date-only. Returns "" for empty
-    input.
+    treats the property as a datetime; when it's zero we emit ``YYYY-MM-DD`` so
+    Notion keeps it as date-only. Returns "" for empty input.
+
+    When ``tz`` is a valid IANA zone, the datetime is rendered with the matching
+    ``+HH:MM`` offset so Notion shows it in that zone. Invalid or unknown ``tz``
+    falls back to the legacy ``...Z`` (UTC) format.
 
     Edge case: a real event at exactly 00:00:00 UTC is indistinguishable from
     a date-only value and will be shown date-only in Notion. The full timestamp
@@ -41,6 +44,15 @@ def _pb_date_to_notion_start(value: Any) -> str:
     hms = time_part.split(".", 1)[0]
     if not hms or hms == "00:00:00":
         return date_part
+    if tz:
+        try:
+            from datetime import datetime, timezone as _utc
+            from zoneinfo import ZoneInfo
+            utc_dt = datetime.strptime(f"{date_part} {hms}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=_utc.utc)
+            local_dt = utc_dt.astimezone(ZoneInfo(tz))
+            return local_dt.isoformat(timespec="seconds")
+        except Exception:
+            pass
     return f"{date_part}T{hms}Z"
 
 
@@ -74,7 +86,8 @@ def title_to_snake(name: str) -> str:
 def pb_field_to_notion_property(value: Any, *,
                                 pb_type: str,
                                 max_select: int = 1,
-                                notion_type: str | None = None) -> dict:
+                                notion_type: str | None = None,
+                                tz: str | None = None) -> dict:
     """Convert a PB value to the body of a Notion property update.
 
     If ``notion_type`` is given, the envelope is chosen by Notion's property
@@ -105,7 +118,7 @@ def pb_field_to_notion_property(value: Any, *,
         if notion_type == "date":
             if not s_value:
                 return {"date": None}
-            start = _pb_date_to_notion_start(s_value)
+            start = _pb_date_to_notion_start(s_value, tz=tz)
             return {"date": {"start": start}} if start else {"date": None}
         if notion_type == "select":
             return {"select": {"name": s_value} if s_value else None}
@@ -147,7 +160,7 @@ def pb_field_to_notion_property(value: Any, *,
     if pb_type == "date":
         if not value:
             return {"date": None}
-        start = _pb_date_to_notion_start(value)
+        start = _pb_date_to_notion_start(value, tz=tz)
         return {"date": {"start": start}} if start else {"date": None}
 
     if pb_type == "select":
