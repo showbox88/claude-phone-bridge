@@ -118,6 +118,7 @@ days {
   weather                text     // free-form: "晴", "雨后转晴"
   note                   text     // daily summary one-liner
   content                editor   // long-form day text
+  timezone               text, max 64   // IANA name; see Timezone section
   trip                   relation→trips (single, OPTIONAL — relaxed in migration 1779465625)
   photos                 (whatever the existing photos field was — preserved)
   notion_id              text (unique-when-non-empty)
@@ -153,6 +154,7 @@ stops {
   // money fields moved to `expenses` collection (see §2.9). A stop can have
   // 0..N expenses linked via expense.stop.
   note                   text     // short comment ("汤太咸")
+  timezone               text, max 64   // IANA name; see Timezone section
   actual_lat             number
   actual_lng             number
   day                    relation→days       (single)
@@ -199,6 +201,7 @@ locations {
   lat, lng (number)
   osm_id, amap_poi_id, fsq_id (text, unique-when-non-empty per source)
   content (editor)
+  timezone (text, max 64)  // IANA name; see Timezone section
   notion_id, notion_last_edited, last_synced_at, created, updated
 }
 
@@ -260,6 +263,7 @@ foods {
   want_again (bool),
   content (editor),
   photos (json),
+  timezone (text, max 64),                          // IANA name; see Timezone section
   location (relation→locations, single, optional),
   stop     (relation→stops,    single, optional),   // 2026-06-05
   day      (relation→days,     single, optional),   // 2026-06-05
@@ -291,6 +295,17 @@ convention: `todo.trip` mirrors `todo.day.trip` when day has a trip.
 Other todo fields are in migrations 8/13 + 1779465629 (the `icon`
 text field that carries the Notion page emoji).
 
+Timezone-aware reminder fields (added 2026-06-05):
+
+```
+todos {
+  ...
+  due_at                 date           // reminder trigger (UTC)
+  due_tz                 text, max 64   // IANA tz user expressed time in
+  ...
+}
+```
+
 ### 2.9 `expenses` (new in migration 1779465626 — replaces `transactions`)
 
 Money child of stops/days/trips. The legacy `transactions` collection
@@ -315,6 +330,7 @@ expenses {
   card                   select(1) [Chase Sapphire Preferred (7675)]
   confirmation           text         // Gmail receipt dedup key (unique-when-non-empty)
   source                 select(1) [手动, Gmail, Agent]
+  timezone               text, max 64 // IANA name; see Timezone section
   stop                   relation→stops    (single, optional)
   day                    relation→days     (single, optional)
   trip                   relation→trips    (single, optional, denormalized = day.trip)
@@ -1098,3 +1114,25 @@ print(backup_collections(PBClient(), Path('.bridge_data/backups')))
 | 19 | extend_days_for_stops_migration.js | days += weather + migrated_to_stop_id |
 | 20 | extend_journal_for_stops.js | journal += related_stop + Reminder + pipeline fields |
 | 21 | drop_legacy_days_fields.js | days -= 12 legacy fields |
+
+---
+
+## §11 Timezone resolution
+
+All trip-stack collections carry an optional `timezone` column (IANA name).
+Writer-side fallback chain (see
+`docs/superpowers/specs/2026-06-05-timezone-design.md`):
+
+1. `stop.timezone` — explicit on the stop (denormalized from location at write time)
+2. `gps_to_tz(stop.actual_lat, stop.actual_lng)` — when GPS present
+3. `day.timezone` — inherited from day
+4. runtime client tz reported by phone-bridge
+5. empty (leave for later patching)
+
+Reminders (`todos.due_at` UTC + `todos.due_tz` IANA) anchor to the resolved tz
+at write time; subsequent edits to the trip's tz do **not** retroactively
+shift existing `due_at` values (the original intent is preserved by `due_tz`).
+
+Notion-side: datetime columns are rendered with the row's `timezone` (or
+`due_tz` for todos) as a `+HH:MM` offset so users see local time in Notion
+directly. The IANA name itself is also synced as a plain text column.

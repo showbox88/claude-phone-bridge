@@ -86,6 +86,19 @@ See **[docs/data-model.md §2.9](docs/data-model.md)** for the schema and
 for the design rationale. Sync wiring (add expenses to sync_config via
 the 同步设置 UI) is a separate follow-up.
 
+### Timezone-aware data (shipped 2026-06-05)
+
+All trip-stack collections now carry `timezone` (IANA name) — `locations`,
+`stops`, `days`, `expenses`, `foods`. `todos` carries `due_at` (UTC) +
+`due_tz` for cross-tz reminders. See
+**[docs/superpowers/specs/2026-06-05-timezone-design.md](docs/superpowers/specs/2026-06-05-timezone-design.md)**
+for the design and `tz_resolver.py` for the shared helpers.
+
+Frontend reports `client_tz` per WS message; server stashes on
+`state.client_tz` and injects it into the agent system prompt. Agents follow
+the fallback chain documented in `mcp_pb/SMARTNOTE_PROMPT.md` (Timezone
+section).
+
 ### Sync registry (where the list of synced tables lives)
 
 As of 2026-06-04 the per-target sync configuration lives entirely in the

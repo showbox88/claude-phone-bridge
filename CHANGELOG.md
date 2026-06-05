@@ -14,6 +14,12 @@
 - **Migrations**：1779465625（days.trip 改 optional——日常 day 可无 trip）+ 1779465626（create expenses）+ 1779465627（drop transactions，safety-gated）+ 1779465628（drop stops 4 个金额字段，safety-gated）+ 数据迁移脚本 `scripts/migrate_transactions_to_expenses.py` + `scripts/migrate_stops_money_to_expenses.py`。
 - **数据保留**：11 行老 transactions 全数迁过来（4 笔 "代付 Monica" 自动归类 `expense_category=代付`），脚本按日期自动建/找 day 容器并回填 trip；6 个 amount>0 的 stop 自动 fan 出 6 条 expense 挂回；4 笔今天的测试 stop（坐火车/冰淇淋/winic tech/Ross）note "测试数据，迟点删除"完整保留。每阶段前 `notion_sync.backup` 落盘。
 - **下一步**（独立 PR）：把 expenses 加进 sync registry（前端"+ 新增同步表"一键搞定）、改 CHECKIN.md / SMARTNOTE_PROMPT.md / 前端，让 agent 不再写 stop.amount，改为建 expense 挂 stop。
+- feat(schema): add timezone fields to locations/stops/days/expenses/foods
+  and due_at/due_tz to todos for cross-tz reminders
+- feat(tz): tz_resolver helper + offline GPS→IANA via timezonefinder
+- feat(backfill): three idempotent scripts populate tz on existing rows
+- feat(sync): Notion datetime columns rendered with row's tz as +HH:MM offset
+- feat(agent): client_tz piped from WS into system prompt
 
 ## 2026-06 — Trip 数据模型 stops redesign
 
