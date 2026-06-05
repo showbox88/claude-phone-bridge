@@ -113,29 +113,46 @@ def find_or_create_activity_db(nc: NotionClient, parent_page_id: str) -> str:
     return db["id"]
 
 
-def _persist_activity_db_id(db_id: str) -> None:
-    """Append NOTION_SYNC_ACTIVITY_DB_ID to .env so reconcile_initial finds it.
+def _persist_env_var(key: str, value: str) -> None:
+    """Append a `KEY=VALUE` line to project-root .env if not already present.
 
-    Looks for .env in the project root (parent of scripts/). If a line already
-    exists for this key, leaves the file alone and prints a warning so the
-    user can update it manually.
+    If .env doesn't exist, prints a WARN with the line to add manually.
+    If the key already exists in .env (any value), prints a WARN and
+    leaves the file alone — caller updates manually rather than risk
+    clobbering a hand-edited value.
     """
     env_path = Path(__file__).resolve().parents[1] / ".env"
     if not env_path.exists():
         print(f"         WARN: {env_path} not found — add manually: "
-              f"NOTION_SYNC_ACTIVITY_DB_ID={db_id}")
+              f"{key}={value}")
         return
-    existing_lines = env_path.read_text(encoding="utf-8").splitlines()
-    for line in existing_lines:
-        if line.strip().startswith("NOTION_SYNC_ACTIVITY_DB_ID="):
-            print(f"         WARN: .env already has NOTION_SYNC_ACTIVITY_DB_ID — "
-                  f"please update to {db_id} manually")
+    existing_text = env_path.read_text(encoding="utf-8")
+    for line in existing_text.splitlines():
+        if line.strip().startswith(f"{key}="):
+            print(f"         WARN: .env already has {key} — "
+                  f"please update to {value} manually")
             return
-    # Append with leading newline if file doesn't end in one.
-    sep = "" if env_path.read_text(encoding="utf-8").endswith("\n") else "\n"
+    sep = "" if existing_text.endswith("\n") else "\n"
     with env_path.open("a", encoding="utf-8") as f:
-        f.write(f"{sep}NOTION_SYNC_ACTIVITY_DB_ID={db_id}\n")
-    print(f"         [ok] appended NOTION_SYNC_ACTIVITY_DB_ID to {env_path}")
+        f.write(f"{sep}{key}={value}\n")
+    print(f"         [ok] appended {key} to {env_path}")
+
+
+def _persist_activity_db_id(db_id: str) -> None:
+    """Append NOTION_SYNC_ACTIVITY_DB_ID to .env so reconcile_initial finds it."""
+    _persist_env_var("NOTION_SYNC_ACTIVITY_DB_ID", db_id)
+
+
+def _persist_parent_page_id(uuid: str) -> None:
+    """Append NOTION_SYNC_PARENT_PAGE_ID to .env so the provisioner can find it.
+
+    Without this, the new "+ 新增同步表" REST flow fails with
+    'NOTION_SYNC_PARENT_PAGE_ID not set' because provisioner.py reads it
+    from env. The original setup historically passed --parent-page-id
+    as a CLI arg without persisting, which left this variable missing
+    from fresh installs / disaster-recovery rebuilds.
+    """
+    _persist_env_var("NOTION_SYNC_PARENT_PAGE_ID", uuid)
 
 
 def seed_sync_config(pb: PBClient) -> None:
@@ -164,6 +181,11 @@ def main() -> int:
     if not args.parent_page_id:
         print("error: pass --parent-page-id or set NOTION_SYNC_PARENT_PAGE_ID")
         return 1
+
+    # Persist the parent page id to .env so future REST calls (settings
+    # UI → "+ 新增同步表" → provisioner.provision_notion_db) can find it
+    # without the CLI arg.
+    _persist_parent_page_id(args.parent_page_id)
 
     nc = NotionClient()
     pb = PBClient()

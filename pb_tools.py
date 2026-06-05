@@ -50,6 +50,12 @@ _AUTO_SYNC_DEBOUNCE_SECS = 10.0
 _pending_sync: set[str] = set()
 _sync_task: asyncio.Task | None = None
 
+# Throttle the "registry unavailable" warning so a sustained PB outage
+# doesn't flood the journal with one line per chat tool call. We log
+# at most once per 60s while the failure persists.
+_REGISTRY_WARN_INTERVAL_SECS = 60.0
+_last_registry_warn_ts: float = 0.0
+
 
 def _schedule_auto_sync(collection: str) -> None:
     """Add a collection to the pending set and (re-)arm the debounced runner.
@@ -61,7 +67,11 @@ def _schedule_auto_sync(collection: str) -> None:
     try:
         auto = collections_with_auto_sync()
     except Exception as e:
-        log.warning("auto-sync registry unavailable: %s", e)
+        global _last_registry_warn_ts
+        now_mono = time.monotonic()
+        if now_mono - _last_registry_warn_ts >= _REGISTRY_WARN_INTERVAL_SECS:
+            log.warning("auto-sync registry unavailable: %s", e)
+            _last_registry_warn_ts = now_mono
         return
     if collection not in auto:
         return
