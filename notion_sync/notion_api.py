@@ -84,15 +84,21 @@ class NotionClient:
     def retrieve_page(self, page_id: str) -> dict:
         return self._http("GET", f"/pages/{page_id}")
 
-    def create_page(self, database_id: str, properties: dict) -> dict:
-        return self._http("POST", "/pages", body={
+    def create_page(self, database_id: str, properties: dict,
+                    icon: dict | None = None) -> dict:
+        body: dict = {
             "parent": {"database_id": database_id},
             "properties": properties,
-        })
+        }
+        if icon is not None:
+            body["icon"] = icon
+        return self._http("POST", "/pages", body=body)
 
     def update_page(self, page_id: str, properties: dict | None = None,
-                    archived: bool | None = None) -> dict:
+                    archived: bool | None = None,
+                    icon: dict | None = None) -> dict:
         body: dict[str, Any] = {}
         if properties is not None: body["properties"] = properties
         if archived is not None: body["archived"] = archived
+        if icon is not None: body["icon"] = icon
         return self._http("PATCH", f"/pages/{page_id}", body=body)

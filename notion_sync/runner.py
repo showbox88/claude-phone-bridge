@@ -42,6 +42,7 @@ from notion_sync.changeset import (
     PbVanished,
     categorize,
 )
+from notion_sync.icons import icon_for
 from notion_sync.logger import log_event
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
@@ -143,7 +144,8 @@ def _apply_pb_to_notion(action: PbOnlyChange, *,
     props = pb_record_to_notion_props(r, field_types, overrides_inv,
                                        title_field, notion_schema)
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
-    page = nc.update_page(action.notion_id, properties=props)
+    page = nc.update_page(action.notion_id, properties=props,
+                          icon=icon_for(collection, r))
     pb.update_record(collection, r["id"], {
         "notion_last_edited": page.get("last_edited_time"),
         "last_synced_at": now_iso_datetime(),
@@ -177,7 +179,8 @@ def _apply_pb_new(action: PbNew, *,
                                        title_field, notion_schema)
     props["pb_id"] = {"rich_text": [{"type": "text", "text": {"content": r["id"]}}]}
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
-    page = nc.create_page(notion_db_id, props)
+    page = nc.create_page(notion_db_id, props,
+                          icon=icon_for(collection, r))
     pb.update_record(collection, r["id"], {
         "notion_id": page["id"],
         "notion_last_edited": page.get("last_edited_time"),
@@ -323,7 +326,8 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
             pb_snap, field_types, overrides_inv, title_field, notion_schema,
         )
         props["last_synced_at"] = {"date": {"start": now_iso_date()}}
-        page = nc.update_page(notion_id, properties=props)
+        page = nc.update_page(notion_id, properties=props,
+                              icon=icon_for(collection, pb_snap))
         pb.update_record(collection, pb_id, {
             "notion_last_edited": page.get("last_edited_time", ""),
             "last_synced_at": now_iso_datetime(),
