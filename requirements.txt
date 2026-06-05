@@ -13,3 +13,5 @@ aiohttp>=3.9
 google-auth>=2.30
 google-auth-oauthlib>=1.2
 google-api-python-client>=2.130
+# Timezone resolution from GPS coordinates (offline polygon lookup)
+timezonefinder>=6.5
