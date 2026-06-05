@@ -4,6 +4,13 @@
 
   const $ = (id) => document.getElementById(id);
 
+  // Reported on every outgoing user_message so the agent can anchor
+  // relative times ("明天 3 点") to the user's actual local timezone.
+  const CLIENT_TZ = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; }
+    catch (_) { return ''; }
+  })();
+
   // Asset cache version — parsed from this script's own `?v=N` query so it
   // updates automatically when index.html bumps the version. Rendered in the
   // app-bar so refresh state is visible at a glance.
@@ -1079,7 +1086,7 @@
     } else {
       const images = pendingAttachments.map((a) => a.path);
       const files = pendingFiles.slice();
-      const ok = send({ type: 'user_message', text, images, files });
+      const ok = send({ type: 'user_message', text, images, files, client_tz: CLIENT_TZ });
       if (!ok) return;
       clearAttachments();
       clearFiles();
@@ -1146,7 +1153,7 @@
 
   function sendCheckin(fields) {
     const block = buildCheckinBlock(fields);
-    const ok = send({ type: 'user_message', text: block, images: [], files: [] });
+    const ok = send({ type: 'user_message', text: block, images: [], files: [], client_tz: CLIENT_TZ });
     if (!ok) return false;
     setResponding(true);
     return true;
