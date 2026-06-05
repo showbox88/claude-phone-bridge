@@ -538,6 +538,32 @@ def main() -> int:
             "last_run_at": now_iso_datetime(),
         })
 
+    # Date-based Notion linkages (Day↔Stops, Day↔Trip, Stop↔Trip).
+    # Linkages derive from Notion-side dates only — independent of PB
+    # relation field values. Idempotent: runs every sync pass but only
+    # PATCHes pages where the date-computed target differs.
+    try:
+        from notion_sync.linkage import update_date_linkages
+        cfg_rows = pb.list_records("sync_config", sort="")
+        rows_by_coll = {r["collection"]: r for r in cfg_rows}
+        d = rows_by_coll.get("days")
+        s = rows_by_coll.get("stops")
+        t = rows_by_coll.get("trips")
+        if d and s and t and d.get("enabled") and s.get("enabled") and t.get("enabled"):
+            linkage_counts = update_date_linkages(
+                nc,
+                days_db_id=d["notion_db_id"],
+                stops_db_id=s["notion_db_id"],
+                trips_db_id=t["notion_db_id"],
+            )
+            overall.update(linkage_counts)
+            log_event("linkages_updated", **linkage_counts)
+        else:
+            log_event("linkages_skipped", reason="days/stops/trips not all enabled")
+    except Exception as e:
+        log_event("linkage_error", error=str(e),
+                  trace=traceback.format_exc()[:500])
+
     # Notify the user if there are Pending Sync Activity rows that need
     # their attention. Best-effort: failure to import push or send
     # doesn't break the run.
