@@ -25,7 +25,8 @@ PocketBase 表：`claude_memos`
 - `pages`           — 长篇独立笔记 / 个人 profile / 路线图
 
 辅助 7 张（涉及时再用，schema 见 `pb_list_collections`）：
-- `locations`, `trips`, `days`, `stops`, `foods` — 行程·地点·消费子系统
+- `locations`, `trips`, `days`, `stops` — 行程·地点子系统
+- `foods` — 吃过什么菜（挂 stop/day/trip 同 expense 模式）
 - `contacts`       — 联系人
 - `expenses`       — 花销（旅行+日常，挂在 stop/day/trip 下；2026-06-05 替换旧 `transactions`）
 
@@ -57,6 +58,16 @@ PocketBase 表：`claude_memos`
 > 5. **硬约束**：`expense.trip` / `todo.trip` 必须 == 对应 day 的 trip
 > 6. expense 的 `stop` 字段：用户提了具体 stop 才填；todo 的 `stop`
 >    也是用户主动说才填，agent 不要猜
+>
+> **foods 同款 + 一点点不同**（2026-06-05 起 foods 也接入 sync）：
+> - "今天吃了拉面"/"去 X 餐厅点了 ABC" → 每道菜建 1 条 foods 行
+>   （`pb_create('foods', {dish, price?, currency?, flavor?, rating?, want_again?, stop?, day, trip}`)
+> - **fast path**：吃饭场景几乎一定有对应 stop（餐厅类别）
+>   - 先确认有没有 stop，没有就建一个 stop（categories=["餐厅","消费"]）
+>   - 然后 foods.stop = stop.id，foods.day = stop.day，foods.trip = stop.trip
+> - 街边小吃没固定地址 → stop.location 留空，仍然建 stop
+> - foods 不绑 amount——金额走 expense（一顿可能多道菜共一笔，也可能 N 个独立账单）
+> - `dish` 必填；`rating` 是 1-5 个 ❤️；`flavor` 是 multi-select（辣/甜/咸/酸/清淡/油腻）
 
 **首次对话或不确定字段时调 `pb_list_collections()` 取实时 schema**——所有 select 字段的当前合法值都在返回里，**不要硬背**。
 

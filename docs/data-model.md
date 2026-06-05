@@ -243,6 +243,42 @@ indexes:
 `type=Reminder` is the English value for what's displayed as "注意" in
 Chinese UI. Don't translate the stored value.
 
+### 2.10 `foods` (joined sync 2026-06-05 via migration 1779465631)
+
+Atomic "dish I ate". A meal at a restaurant or a street food snack
+creates 1 stop (category=餐厅) + N foods rows (one per dish) + 0..N
+expenses (the bill, possibly split). foods.location is older / optional;
+when stop is set, `stop.location` is the source of truth and
+`foods.location` is redundant convenience.
+
+```
+foods {
+  id, dish (required, max 500),
+  price (number), currency (select 1) [JPY, EUR, USD, CNY, 其他],
+  flavor (multi, maxSelect=6) [辣, 甜, 咸, 酸, 清淡, 油腻],
+  rating (select 1) [❤️ ... ❤️❤️❤️❤️❤️],
+  want_again (bool),
+  content (editor),
+  photos (json),
+  location (relation→locations, single, optional),
+  stop     (relation→stops,    single, optional),   // 2026-06-05
+  day      (relation→days,     single, optional),   // 2026-06-05
+  trip     (relation→trips,    single, optional, denormalized = day.trip),
+  notion_id, notion_last_edited, last_synced_at, created, updated
+}
+
+indexes:
+  idx_foods_location, idx_foods_rating,
+  idx_foods_stop, idx_foods_day, idx_foods_trip,
+  UNIQUE idx_foods_notion_id WHERE != ''
+```
+
+**Use cases**:
+- "今天吃了什么" → `foods where day = today_day_id`
+- "京都 trip 美食汇总" → `foods where trip = T`
+- "这家店点过什么" → `foods where location = L` (across visits) or
+  `foods where stop = S` (one visit)
+
 ### 2.7 `plans` / `todos`
 
 `plans` and `todos` are synced but not central to trip flow. Trips link
@@ -991,7 +1027,7 @@ print(backup_collections(PBClient(), Path('.bridge_data/backups')))
 
 ## 10. Quick reference: all IDs
 
-### PB sync targets (9)
+### PB sync targets (10)
 
 | PB collection | Title field | Date field | Notion DB |
 |---|---|---|---|
@@ -999,6 +1035,7 @@ print(backup_collections(PBClient(), Path('.bridge_data/backups')))
 | `days`      | name        | date        | `13329dea-4f55-4fc8-8e64-6c1ff19353bb` |
 | `stops`     | name        | date        | `15bb0429-a026-48b4-96f8-4447d5060ee3` |
 | `expenses`  | description | date        | `376acd0f-bb89-815d-b137-f281c201f24e` |
+| `foods`     | dish        | —           | `376acd0f-bb89-81cd-8023-c7058e208e43` |
 | `plans`     | title       | target_date | `c951c7a9-a8f5-4ffd-aea2-1244e437ae46` |
 | `todos`     | title       | due_date    | `5d4e3f93-cf13-4707-97c5-59b38940baac` |
 | `contacts`  | name        | —           | `e304a6c3-4771-4c69-9ffc-97a672a1ac0c` |

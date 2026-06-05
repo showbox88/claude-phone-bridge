@@ -21,6 +21,8 @@ TRIP_ICON_EMOJI = "✈️"
 STOP_DEFAULT_EMOJI = "📍"
 EXPENSE_DEFAULT_EMOJI = "💸"
 TODO_DEFAULT_EMOJI = "📌"
+FOOD_DEFAULT_EMOJI = "🍽️"
+FOOD_TOP_RATING_EMOJI = "🤤"
 
 # Todo status → fallback emoji when no leading emoji in title.
 TODO_STATUS_EMOJI: dict[str, str] = {
@@ -137,6 +139,17 @@ def icon_for_todo(record: dict) -> dict:
     return _emoji(TODO_STATUS_EMOJI.get(status, TODO_DEFAULT_EMOJI))
 
 
+def icon_for_food(record: dict) -> dict:
+    """Notion icon for a Food page.
+
+    Default 🍽️. Boost to 🤤 for the top rating (5 hearts).
+    """
+    rating = (record.get("rating") or "").strip()
+    if rating == "❤️❤️❤️❤️❤️":
+        return _emoji(FOOD_TOP_RATING_EMOJI)
+    return _emoji(FOOD_DEFAULT_EMOJI)
+
+
 def icon_for_expense(expense_category) -> dict:
     """Notion icon spec for an Expense page based on its expense_category.
 
@@ -161,4 +174,6 @@ def icon_for(collection: str, row: dict) -> dict | None:
         return icon_for_expense(row.get("expense_category"))
     if collection == "todos":
         return icon_for_todo(row)
+    if collection == "foods":
+        return icon_for_food(row)
     return None
