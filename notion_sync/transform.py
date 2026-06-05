@@ -1,12 +1,11 @@
 """PB ↔ Notion row-level transforms — shared by reconcile_initial and runner.
 
-PR2 limitation: relation fields are NOT translated between sides. Notion
-stores its own page UUIDs as relation targets; PB stores its own record
-IDs. The two ID spaces don't match, so blindly copying a Notion UUID
-into PB's relation field fails validation. Until a future PR implements
-the ID lookup, this module skips relation fields in BOTH directions —
-PB relations stay at whatever PR1 reconcile aligned them to; user edits
-to relation fields in either UI do not propagate.
+PB→Notion relation translation: when caller supplies `relation_lookup` +
+`relation_targets`, `pb_record_to_notion_props` translates PB relation
+ids to Notion page UUIDs by looking up the target collection's pipeline
+`notion_id` field. Notion→PB relation translation is still skipped
+(needs the inverse lookup; user edits to relation columns on Notion side
+do not propagate to PB).
 """
 from __future__ import annotations
 
@@ -27,6 +26,44 @@ def collection_field_types(pb: PBClient, name: str) -> dict[str, dict]:
                 for f in c.get("fields", [])
             }
     raise RuntimeError(f"collection not found: {name}")
+
+
+def relation_target_collections(pb: PBClient, collection: str) -> dict[str, str]:
+    """For each relation field on `collection`, return its target collection name.
+
+    Maps `{relation_field_name: target_collection_name}` so the caller can
+    look up the right pipeline map when translating PB ids to Notion ids.
+    """
+    cols = pb.list_collections()
+    src = next((c for c in cols if c["name"] == collection), None)
+    if src is None:
+        raise RuntimeError(f"collection not found: {collection}")
+    by_id = {c["id"]: c["name"] for c in cols}
+    out: dict[str, str] = {}
+    for f in src.get("fields", []):
+        if f.get("type") != "relation":
+            continue
+        target_id = f.get("collectionId")
+        if not target_id or target_id not in by_id:
+            continue
+        out[f["name"]] = by_id[target_id]
+    return out
+
+
+def build_relation_lookup(pb: PBClient, collections: list[str]) -> dict[str, dict[str, str]]:
+    """Build `{collection: {pb_id: notion_id}}` by reading the pipeline notion_id.
+
+    Only rows whose `notion_id` is non-empty are included — rows not yet
+    synced to Notion can't be translated.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for c in collections:
+        try:
+            rows = pb.list_records(c, sort="")
+        except Exception:
+            continue
+        out[c] = {r["id"]: r["notion_id"] for r in rows if r.get("notion_id")}
+    return out
 
 
 def notion_page_to_pb_dict(page: dict, field_types: dict[str, dict],
@@ -50,7 +87,17 @@ def notion_page_to_pb_dict(page: dict, field_types: dict[str, dict],
 def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
                               overrides_inv: dict[str, str],
                               title_field: str,
-                              notion_schema: dict[str, dict]) -> dict:
+                              notion_schema: dict[str, dict],
+                              relation_lookup: dict[str, dict[str, str]] | None = None,
+                              relation_targets: dict[str, str] | None = None) -> dict:
+    """PB row → Notion property dict.
+
+    When `relation_lookup` (`{collection: {pb_id: notion_id}}`) and
+    `relation_targets` (`{relation_field_name: target_collection}`) are both
+    supplied, relation fields are translated to Notion `relation` properties.
+    PB ids that don't resolve to a Notion page (unsynced target) are dropped
+    silently; an empty relation list still clears the column on Notion side.
+    """
     SKIP = {"id", "created", "updated", "collectionId", "collectionName",
             "expand", "notion_id", "notion_last_edited", "last_synced_at"}
     notion_by_snake = {title_to_snake(name): name for name in notion_schema}
@@ -58,6 +105,8 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
         (n for n, s in notion_schema.items() if s.get("type") == "title"),
         None,
     )
+
+    can_translate_relations = relation_lookup is not None and relation_targets is not None
 
     props: dict = {}
     for pb_name, value in record.items():
@@ -68,12 +117,29 @@ def pb_record_to_notion_props(record: dict, field_types: dict[str, dict],
         if pb_name == title_field:
             continue
         spec = field_types[pb_name]
-        # PR2: skip relation fields — cross-ID translation deferred.
-        if spec["type"] == "relation":
-            continue
         notion_name = overrides_inv.get(pb_name) or notion_by_snake.get(pb_name)
         if not notion_name or notion_name not in notion_schema:
             continue
+
+        if spec["type"] == "relation":
+            if not can_translate_relations:
+                continue
+            target_col = relation_targets.get(pb_name)
+            if not target_col:
+                continue
+            if notion_schema[notion_name].get("type") != "relation":
+                continue
+            target_map = relation_lookup.get(target_col, {})
+            if isinstance(value, str):
+                pb_ids = [value] if value else []
+            elif isinstance(value, list):
+                pb_ids = [v for v in value if v]
+            else:
+                pb_ids = []
+            notion_refs = [{"id": target_map[pid]} for pid in pb_ids if pid in target_map]
+            props[notion_name] = {"relation": notion_refs}
+            continue
+
         notion_type = notion_schema[notion_name].get("type")
         props[notion_name] = pb_field_to_notion_property(
             value,

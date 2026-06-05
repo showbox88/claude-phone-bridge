@@ -33,9 +33,11 @@ from notion_sync.matching import best_match
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.transform import (
+    build_relation_lookup,
     collection_field_types,
     notion_page_to_pb_dict,
     pb_record_to_notion_props,
+    relation_target_collections,
 )
 
 
@@ -69,6 +71,14 @@ def reconcile_one(collection: str, notion_db_id: str,
     # the correct envelope per Notion property type.
     notion_db = nc.retrieve_database(notion_db_id)
     notion_schema = notion_db.get("properties", {})
+
+    # PB→Notion relation lookup: needed so PB ids in relation fields can
+    # be translated to Notion page UUIDs. Covers all currently-enabled
+    # sync targets.
+    all_targets = pb.list_records("sync_config", filter="enabled=true", sort="")
+    target_names = [t["collection"] for t in all_targets]
+    relation_lookup = build_relation_lookup(pb, target_names)
+    relation_targets = relation_target_collections(pb, collection)
 
     pb_rows = pb.list_records(collection)
     notion_rows = nc.query_database(notion_db_id)
@@ -153,7 +163,9 @@ def reconcile_one(collection: str, notion_db_id: str,
     pb_only_created = 0
     for r in pb_only:
         props = pb_record_to_notion_props(r, field_types, overrides_inv,
-                                          title_field, notion_schema)
+                                          title_field, notion_schema,
+                                          relation_lookup=relation_lookup,
+                                          relation_targets=relation_targets)
         props["pb_id"] = {"rich_text": [{"type": "text", "text": {"content": r["id"]}}]}
         props["last_synced_at"] = {"date": {"start": now_iso_date()}}
         if dry_run:

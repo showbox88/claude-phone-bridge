@@ -793,25 +793,27 @@ frozen. User decides `Delete both` (propagate the deletion) or
 
 ## 8. Known limitations
 
-### 8.1 Relations are NOT bidirectionally synced
+### 8.1 Relations: PB→Notion now synced, Notion→PB still skipped
 
-`notion_sync/transform.py:40-46` (Notion → PB) and `:70-72` (PB → Notion)
-both skip `relation`-typed fields. Reason: PB and Notion use different
-ID spaces (PB record id vs Notion page UUID); a naive copy writes garbage.
+**As of 2026-06-05** `notion_sync/transform.py` translates PB relation
+ids to Notion page UUIDs by looking up each target collection's pipeline
+`notion_id` field (`build_relation_lookup()` + `relation_target_collections()`).
+The runner builds the lookup once per `sync_collection` pass and threads
+it through `pb_record_to_notion_props`. `scripts/backfill_relations.py`
+backfills existing pages one-off.
 
-**Affected fields**:
-- `trips.related_plan`, `trips.companions`
-- `stops.day`, `stops.trip`, `stops.location`, `stops.contact`, `stops.journal`
-- `journal.related_trip`, `journal.related_day`, `journal.related_stop`
+**PB→Notion** (works):
+- All `relation` fields on synced collections write through to Notion's
+  matching relation property when the target page exists (i.e. the target
+  PB row has `notion_id` set). Brand new rows whose target wasn't yet
+  synced in this pass appear empty on first write and fill in on the
+  next pass.
 
-What this means today:
-- PB side: relations are correct and queryable
-- Notion side: relation columns exist but stay empty (sync ignores them)
-- The Notion-side "Related to X (Y)" auto-reverse columns also stay empty
-
-**Fix path** (future PR — relation-sync): build a lookup table
-`{collection, pb_id} ↔ {notion_page_id}` from each row's pipeline
-fields, extend the codec to translate relation arrays in both directions.
+**Notion→PB** (still skipped):
+- `notion_page_to_pb_dict` still drops relation properties. Reason: same
+  ID-space problem in the other direction. User edits to relation
+  columns in Notion do not propagate to PB. Fix path: add the inverse
+  lookup `{collection: {notion_id: pb_id}}` and translate symmetrically.
 
 ### 8.2 `date` fields lose time on Notion round-trip
 

@@ -47,9 +47,11 @@ from notion_sync.logger import log_event
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.transform import (
+    build_relation_lookup,
     collection_field_types,
     notion_page_to_pb_dict,
     pb_record_to_notion_props,
+    relation_target_collections,
 )
 
 
@@ -139,10 +141,14 @@ def _apply_pb_to_notion(action: PbOnlyChange, *,
                         overrides_inv: dict,
                         title_field: str,
                         notion_schema: dict,
+                        relation_lookup: dict | None,
+                        relation_targets: dict | None,
                         pb: PBClient, nc: NotionClient) -> None:
     r = action.pb_row
     props = pb_record_to_notion_props(r, field_types, overrides_inv,
-                                       title_field, notion_schema)
+                                       title_field, notion_schema,
+                                       relation_lookup=relation_lookup,
+                                       relation_targets=relation_targets)
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
     page = nc.update_page(action.notion_id, properties=props,
                           icon=icon_for(collection, r))
@@ -173,10 +179,14 @@ def _apply_pb_new(action: PbNew, *,
                   overrides_inv: dict,
                   title_field: str,
                   notion_schema: dict,
+                  relation_lookup: dict | None,
+                  relation_targets: dict | None,
                   pb: PBClient, nc: NotionClient) -> None:
     r = action.pb_row
     props = pb_record_to_notion_props(r, field_types, overrides_inv,
-                                       title_field, notion_schema)
+                                       title_field, notion_schema,
+                                       relation_lookup=relation_lookup,
+                                       relation_targets=relation_targets)
     props["pb_id"] = {"rich_text": [{"type": "text", "text": {"content": r["id"]}}]}
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
     page = nc.create_page(notion_db_id, props,
@@ -214,7 +224,9 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
                             overrides: dict,
                             overrides_inv: dict,
                             title_field: str,
-                            notion_schema: dict) -> int:
+                            notion_schema: dict,
+                            relation_lookup: dict | None = None,
+                            relation_targets: dict | None = None) -> int:
     """Apply user-decided Sync Activity rows for this collection.
 
     Reads Sync Activity for rows where:
@@ -248,6 +260,8 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
                 field_types=field_types, overrides=overrides,
                 overrides_inv=overrides_inv, title_field=title_field,
                 notion_schema=notion_schema,
+                relation_lookup=relation_lookup,
+                relation_targets=relation_targets,
             )
             nc.update_page(row["id"], properties={
                 "applied_at": {"date": {"start": now_iso_date()}},
@@ -265,7 +279,9 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
 def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
                         collection: str, field_types: dict,
                         overrides: dict, overrides_inv: dict,
-                        title_field: str, notion_schema: dict) -> None:
+                        title_field: str, notion_schema: dict,
+                        relation_lookup: dict | None = None,
+                        relation_targets: dict | None = None) -> None:
     p = row["properties"]
     decision = (p.get("decision", {}).get("select") or {}).get("name") or ""
     pb_id = "".join(rt.get("plain_text", "") for rt in p.get("pb_id", {}).get("rich_text", []))
@@ -324,6 +340,8 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
             raise RuntimeError("Use PB requires both IDs + pb_snapshot")
         props = pb_record_to_notion_props(
             pb_snap, field_types, overrides_inv, title_field, notion_schema,
+            relation_lookup=relation_lookup,
+            relation_targets=relation_targets,
         )
         props["last_synced_at"] = {"date": {"start": now_iso_date()}}
         page = nc.update_page(notion_id, properties=props,
@@ -358,6 +376,15 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     notion_db = nc.retrieve_database(notion_db_id)
     notion_schema = notion_db.get("properties", {})
 
+    # Build PB→Notion relation lookup once per sync_collection call. Covers
+    # every currently-enabled sync target. Fresh rows added DURING this
+    # pass don't appear in the lookup, but they'll be linkable on the next
+    # pass — acceptable for initial relation backfill.
+    all_targets = pb.list_records("sync_config", filter="enabled=true", sort="")
+    target_names = [t["collection"] for t in all_targets]
+    relation_lookup = build_relation_lookup(pb, target_names)
+    relation_targets = relation_target_collections(pb, collection)
+
     # Phase 0: apply user-decided Sync Activity rows. After this, applied
     # rows have applied_at set and won't appear in the freeze set below.
     decisions_applied = apply_pending_decisions(
@@ -365,6 +392,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
         field_types=field_types, overrides=overrides,
         overrides_inv=overrides_inv, title_field=title_field,
         notion_schema=notion_schema,
+        relation_lookup=relation_lookup,
+        relation_targets=relation_targets,
     )
 
     pb_rows = pb.list_records(collection, sort="")
@@ -401,6 +430,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                                      overrides_inv=overrides_inv,
                                      title_field=title_field,
                                      notion_schema=notion_schema,
+                                     relation_lookup=relation_lookup,
+                                     relation_targets=relation_targets,
                                      pb=pb, nc=nc)
             elif isinstance(a, NotionOnlyChange):
                 _apply_notion_to_pb(a, collection=collection,
@@ -415,6 +446,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                                overrides_inv=overrides_inv,
                                title_field=title_field,
                                notion_schema=notion_schema,
+                               relation_lookup=relation_lookup,
+                               relation_targets=relation_targets,
                                pb=pb, nc=nc)
             elif isinstance(a, NotionNew):
                 _apply_notion_new(a, collection=collection,
