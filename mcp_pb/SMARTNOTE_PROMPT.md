@@ -27,13 +27,21 @@ PocketBase 表：`claude_memos`
 辅助 7 张（涉及时再用，schema 见 `pb_list_collections`）：
 - `locations`, `trips`, `days`, `stops`, `foods` — 行程·地点·消费子系统
 - `contacts`       — 联系人
-- `transactions`   — 信用卡消费
+- `expenses`       — 花销（旅行+日常，挂在 stop/day/trip 下；2026-06-05 替换旧 `transactions`）
 
 > **2026-06-03 stops redesign**：`days` 不再存"事件信息"（金额、评分、
 > 类型、坐标、checkin 时间），只剩日级容器字段（name / date / weather /
 > note）。所有"今天买了一杯咖啡、今天吃了拉面、今天打车去了机场"这种
 > 原子事件都写到 `stops` 表，并用 `stop.day` 反向挂到当天的 day 上。
-> 详见 [`docs/data-model.md`](../docs/data-model.md)。
+>
+> **2026-06-05 expenses redesign**：金额字段（amount/currency/rate/
+> amount_usd）已从 `stops` 移到新表 `expenses`。`expenses` 是 stops/
+> days/trips 的子表——一个 stop 可有 N 个 expense（公园 visit = 门票 +
+> 冰淇淋 + 水）；日常消费 expense.stop=空、expense.day=今天。**写 stop
+> 时不要再传 amount / currency / rate / amount_usd**——这些字段不存在了。
+> 写花销请 `pb_create('expenses', {...})`，必填 `description / amount /
+> date / type='支出' / expense_category / source / stop(或空) / day /
+> trip(=day.trip)`。详见 [`docs/data-model.md`](../docs/data-model.md) §2.9。
 
 **首次对话或不确定字段时调 `pb_list_collections()` 取实时 schema**——所有 select 字段的当前合法值都在返回里，**不要硬背**。
 

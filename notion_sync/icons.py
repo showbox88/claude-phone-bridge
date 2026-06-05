@@ -11,6 +11,7 @@ from __future__ import annotations
 DAY_ICON_EMOJI = "📅"
 TRIP_ICON_EMOJI = "✈️"
 STOP_DEFAULT_EMOJI = "📍"
+EXPENSE_DEFAULT_EMOJI = "💸"
 
 # Ordered most-specific → most-generic. First match wins when a stop has
 # multiple categories. Keep in sync with CHECKIN.md's `categories` enum.
@@ -24,6 +25,20 @@ STOP_CATEGORY_PRIORITY: list[tuple[str, str]] = [
     ("笔记", "📝"),
     ("消费", "☕"),
 ]
+
+# Expense single-select category → emoji. Default 💸 for unmatched / empty.
+EXPENSE_CATEGORY_EMOJI: dict[str, str] = {
+    "餐饮":     "🍽️",
+    "交通":     "🚗",
+    "购物/日用": "🛒",
+    "娱乐":     "🎉",
+    "旅行":     "✈️",
+    "订阅服务": "📺",
+    "门票":     "🎫",
+    "住宿":     "🏨",
+    "代付":     "🤝",
+    "其他":     "💸",
+}
 
 
 def _emoji(emoji: str) -> dict:
@@ -58,6 +73,18 @@ def icon_for_stop(categories) -> dict:
     return _emoji(STOP_DEFAULT_EMOJI)
 
 
+def icon_for_expense(expense_category) -> dict:
+    """Notion icon spec for an Expense page based on its expense_category.
+
+    `expense_category` is a single-select string (or None). Unknown /
+    empty → 💸.
+    """
+    if not expense_category:
+        return _emoji(EXPENSE_DEFAULT_EMOJI)
+    emoji = EXPENSE_CATEGORY_EMOJI.get(str(expense_category), EXPENSE_DEFAULT_EMOJI)
+    return _emoji(emoji)
+
+
 def icon_for(collection: str, row: dict) -> dict | None:
     """Dispatch by collection. Returns None for collections without policy."""
     if collection == "days":
@@ -66,4 +93,6 @@ def icon_for(collection: str, row: dict) -> dict | None:
         return icon_for_trip()
     if collection == "stops":
         return icon_for_stop(row.get("categories"))
+    if collection == "expenses":
+        return icon_for_expense(row.get("expense_category"))
     return None

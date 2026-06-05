@@ -54,7 +54,7 @@ def main() -> int:
     pb = PBClient()
     nc = NotionClient()
     total = 0
-    for c in ("days", "trips", "stops"):
+    for c in ("days", "trips", "stops", "expenses"):
         p, s = backfill(c, pb, nc)
         print(f"{c}: patched={p} skipped={s}")
         total += p

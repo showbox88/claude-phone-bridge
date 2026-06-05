@@ -85,9 +85,11 @@ curl -sS -H "Authorization: $PB_TOKEN" "$PB_URL/api/collections/trips/records?fi
 ### Step 3：upsert Day（容器）+ 新建 Stop（事件）
 
 > **重要**：2026-06-03 stops redesign 之后，`days` 表只剩"日级"容器字段
-> （name / date / weather / note / content / trip）。打卡的所有"事件
-> 信息"（金额、评分、类型、坐标、checkin 时间）都搬到了 `stops`。
-> 一个真实的日历日 = 1 个 day 行 + N 个 stop 行。
+> （name / date / weather / note / content / trip）。打卡的"事件信息"
+> （评分、类型、坐标、checkin 时间）搬到了 `stops`；2026-06-05 expenses
+> redesign 之后，**金额相关字段又从 stops 搬到了 `expenses`**（child of
+> stops），所以一次打卡可能是 day + stop + 0..N 个 expense。
+> 一个真实日历日 = 1 个 day 行 + N 个 stop 行 + M 个 expense 行。
 
 **3a. Upsert Day（找今天的容器；没有就建一个）**
 
@@ -140,23 +142,20 @@ fi
 **3b. 创建 Stop（具体事件）**
 
 ```bash
-curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json" \
+STOP_ID=$(curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json" \
   "$PB_URL/api/collections/stops/records" \
   -d '{
     "name": "<事件描述，默认用 location.name 或 activity 标签>",
     "date": "<YYYY-MM-DD>",
     "checkin": "<when 完整 ISO-8601 时间戳>",
     "categories": ["<打卡|酒店|餐厅|购物|体验|交通|笔记|消费 中的一个或多个>"],
-    "amount": <数字或省略>,
-    "currency": "<JPY|EUR|USD|CNY|其他 或省略>",
-    "rate": <数字或省略>,
     "note": "<短评>",
     "day": "<day_id from 3a>",
     "trip": "<trip_id 或空字符串>",
     "location": "<location_id 或空字符串>",
     "actual_lat": <gps[0]>,
     "actual_lng": <gps[1]>
-  }'
+  }' | jq -r '.id')
 ```
 
 **字段映射**：旧 YAML 的 `activity_type` 现在翻成 `categories` 数组里的一
@@ -164,10 +163,56 @@ curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/jso
 → `["酒店", "消费"]`。旧 `score`（0-10 数字）不再存在 stop 上，转写到
 Step 4 的 location.rating（已经是这个流程）。
 
-- `amount_usd`：stops 表的 `amount_usd` 字段，目前是给前端 derived 用的；
-  你 POST 时可以不传，或者算好传上去（`amount * rate`），二者都行
+- **金额已经不在 stop 上**——`amount` / `currency` / `rate` / `amount_usd`
+  四个字段 2026-06-05 起搬到 `expenses` 表。本步骤的 stop 只承载"做了什么"
+  信息（事件、地点、坐标、时间、评分类标签）。金额走下面的 3c。
 - `categories` 是 multi-select，至少给一个值
 - 字段省略时不要写 `null` 字符串（PB 会当文字"null"）——直接 omit key
+
+**3c. 创建 Expense（如果有金额）**
+
+打卡 YAML 里有 `amount` 字段，或者用户提到花了多少钱时，建一条 expense
+挂到刚才的 stop 上。**没花钱（纯打卡、笔记）则跳过这一步**。
+
+```bash
+# 一次打卡也可能有多笔花销（公园 = 门票 + 冰淇淋 + 水）——多笔就 POST 多次
+
+# 计算 amount_usd（写入侧约定，PB 不强制）：
+# - currency='USD' → amount_usd = amount
+# - currency!='USD' → amount_usd = amount * rate
+
+curl -sS -X POST -H "Authorization: $PB_TOKEN" -H "Content-Type: application/json" \
+  "$PB_URL/api/collections/expenses/records" \
+  -d '{
+    "description": "<事件名 · 备注，例如 \"星巴克(国贸店) · WiFi慢\">",
+    "amount": <数字>,
+    "currency": "<USD|JPY|EUR|CNY|其他>",
+    "rate": <数字或省略；USD 行可省>,
+    "amount_usd": <按上面公式算好的数>,
+    "date": "<YYYY-MM-DD>",
+    "type": "支出",
+    "expense_category": "<旅行|订阅服务|娱乐|交通|购物/日用|餐饮|门票|住宿|代付|其他>",
+    "source": "Agent",
+    "stop": "<STOP_ID from 3b>",
+    "day": "<day_id from 3a>",
+    "trip": "<trip_id 或空字符串，必须 = day.trip>"
+  }'
+```
+
+**expense_category 推断**（按 stop.categories 给提示，不绝对）：
+- 餐厅 → 餐饮
+- 酒店 → 住宿
+- 交通 → 交通
+- 购物 → 购物/日用
+- 体验 → 娱乐
+- 打卡（纯地标，没餐饮/购物）→ 门票
+- 笔记/消费（无别的指向）→ 其他
+- 含"代付"字样 → 代付（特殊场景：替他人垫付）
+
+**约定**（写入侧硬性）：
+- `expense.trip` 必须 = day.trip（denormalized 冗余字段）
+- 退款场景（少见）`type="退款"` 时 `amount` 存负数
+- `description` 必填，建议 `<stop.name> · <stop.note>` 截到 500 字内
 
 ---
 
@@ -196,7 +241,9 @@ curl -sS -X PATCH -H "Authorization: $PB_TOKEN" -H "Content-Type: application/js
 成功：
 ```
 ✅ 打卡 📍 <店名>
-   Day《<day_name>》· Stop <categories[0]> · ¥38 · ⭐⭐⭐⭐
+   Day《<day_name>》· Stop <categories[0]> · ⭐⭐⭐⭐
+   {若有} 💸 ¥38 (<expense_category>)
+   {若有多笔} 💸 ¥X (cat1) + ¥Y (cat2) = ¥(X+Y)
    {若有} 关联 Trip《<trip_title>》
 ```
 
@@ -212,7 +259,7 @@ curl -sS -X PATCH -H "Authorization: $PB_TOKEN" -H "Content-Type: application/js
 
 **优先路径(自动)**：用 MCP 工具 `mcp__pb__pb_create` / `pb_update` 写
 PB 时，pb_tools 会自动 schedule 一次 10 秒 debounce 后的 sync，无需
-手动触发。这一次打卡(location + day + stop)的三次 pb 写入会合并
+手动触发。这一次打卡(location + day + stop + 0..N expense)的多次 pb 写入会合并
 成每个 collection 一次 `--only X` 的后台 sync，~30 秒内 Notion 全部可见。
 
 **fallback(手动)**：如果你走的是 Step 1-3 里的原始 curl 路径（没用
@@ -220,7 +267,7 @@ MCP `pb_create`，所以 pb_tools 的自动 hook 不会触发），Step 5 反馈
 **追加一步**：
 
 通过 MCP：调 `sync_now`（不带 `collection` 参数，locations / days /
-stops 全推）。或 shell：
+stops / expenses 全推）。或 shell：
 
 ```bash
 cd /home/dev/phone-bridge && set -a; . ./.env; set +a; \

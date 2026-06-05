@@ -983,18 +983,19 @@ print(backup_collections(PBClient(), Path('.bridge_data/backups')))
 
 ## 10. Quick reference: all IDs
 
-### PB sync targets (8)
+### PB sync targets (9)
 
 | PB collection | Title field | Date field | Notion DB |
 |---|---|---|---|
-| `trips`     | title | date_start  | `df7ea062-7b18-4c4f-98f1-bfec8258c3db` |
-| `days`      | name  | date        | `13329dea-4f55-4fc8-8e64-6c1ff19353bb` |
-| `stops`     | name  | date        | `15bb0429-a026-48b4-96f8-4447d5060ee3` |
-| `plans`     | title | target_date | `c951c7a9-a8f5-4ffd-aea2-1244e437ae46` |
-| `todos`     | title | due_date    | `5d4e3f93-cf13-4707-97c5-59b38940baac` |
-| `contacts`  | name  | —           | `e304a6c3-4771-4c69-9ffc-97a672a1ac0c` |
-| `locations` | name  | —           | `257c34c1-ac50-455d-9c8a-8d810de5c1e5` |
-| `journal`   | title | date        | `ccc3b239-682d-47a1-a20e-e33b3c8fae44` |
+| `trips`     | title       | date_start  | `df7ea062-7b18-4c4f-98f1-bfec8258c3db` |
+| `days`      | name        | date        | `13329dea-4f55-4fc8-8e64-6c1ff19353bb` |
+| `stops`     | name        | date        | `15bb0429-a026-48b4-96f8-4447d5060ee3` |
+| `expenses`  | description | date        | `376acd0f-bb89-815d-b137-f281c201f24e` |
+| `plans`     | title       | target_date | `c951c7a9-a8f5-4ffd-aea2-1244e437ae46` |
+| `todos`     | title       | due_date    | `5d4e3f93-cf13-4707-97c5-59b38940baac` |
+| `contacts`  | name        | —           | `e304a6c3-4771-4c69-9ffc-97a672a1ac0c` |
+| `locations` | name        | —           | `257c34c1-ac50-455d-9c8a-8d810de5c1e5` |
+| `journal`   | title       | date        | `ccc3b239-682d-47a1-a20e-e33b3c8fae44` |
 
 ### Notion data source IDs (for MCP `notion-update-data-source` calls)
 
