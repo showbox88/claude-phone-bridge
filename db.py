@@ -70,6 +70,12 @@ def _conn() -> sqlite3.Connection:
     assert _DB_PATH is not None, "db.init() not called"
     c = sqlite3.connect(_DB_PATH)
     c.row_factory = sqlite3.Row
+    # WAL: concurrent readers while a writer holds the lock; crash-safe
+    # without rollback. journal_mode is a database-level persistent setting;
+    # re-setting per connection is a no-op once the file is already in WAL.
+    c.execute("PRAGMA journal_mode = WAL")
+    # NORMAL is the canonical WAL companion: durable without per-write fsync.
+    c.execute("PRAGMA synchronous = NORMAL")
     c.execute("PRAGMA foreign_keys = ON")
     return c
 

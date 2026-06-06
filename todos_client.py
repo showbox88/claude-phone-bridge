@@ -14,11 +14,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import os
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any
+
+from app.settings import Settings
 
 log = logging.getLogger("bridge.todos")
 
@@ -27,10 +28,11 @@ _PAGE_SIZE = 200
 
 
 def _pb_config() -> tuple[str, str, str]:
-    url = os.environ.get("POCKETBASE_URL", "").rstrip("/")
-    email = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
-    password = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
-    return url, email, password
+    # Construct Settings each call so rotated credentials in env are
+    # picked up without restarting the server (intentional behavior;
+    # the module-level cached singleton would freeze at import time).
+    s = Settings()
+    return s.pocketbase_url, s.pocketbase_admin_email, s.pocketbase_admin_password
 
 
 def _auth_token() -> str | None:

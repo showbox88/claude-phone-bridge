@@ -60,17 +60,24 @@ def _load_env(path: str) -> None:
             os.environ.setdefault(k.strip(), v.strip())
 
 
+# MCP_PB_ENV intentionally stays on os.environ: _load_env must run BEFORE
+# Settings is imported (it populates env from the .env file Settings then
+# reads). Phase 1 cleanup considers replacing _load_env entirely with
+# pydantic-settings' built-in .env support.
 _load_env(os.environ.get("MCP_PB_ENV", "/home/dev/phone-bridge/.env"))
 
-PB_URL          = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090").rstrip("/")
-PB_EMAIL        = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
-PB_PASSWORD     = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
-LISTEN_HOST     = os.environ.get("MCP_PB_HOST", "127.0.0.1")
-LISTEN_PORT     = int(os.environ.get("MCP_PB_PORT", "8091"))
-PUBLIC_URL      = os.environ.get(
-    "MCP_PB_PUBLIC_URL",
-    "https://dashboard-server.tail4cfa2.ts.net/mcp",
-).rstrip("/")
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+from app.settings import settings  # noqa: E402
+
+PB_URL          = settings.pocketbase_url or "http://127.0.0.1:8090"
+PB_EMAIL        = settings.pocketbase_admin_email
+PB_PASSWORD     = settings.pocketbase_admin_password
+LISTEN_HOST     = settings.mcp_pb_host
+LISTEN_PORT     = settings.mcp_pb_port
+PUBLIC_URL      = (settings.mcp_pb_public_url
+                   or "https://dashboard-server.tail4cfa2.ts.net/mcp").rstrip("/")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("mcp_pb")

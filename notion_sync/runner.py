@@ -23,7 +23,16 @@ import os
 import sys
 import traceback
 from datetime import datetime, timedelta, timezone
+from pathlib import Path as _Path
 from zoneinfo import ZoneInfo
+
+# notion_sync runs as a subprocess via `python -m notion_sync.runner`;
+# add the parent dir to sys.path so `app` is importable. Phase 2 cleans
+# this up by moving everything under app/.
+sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+from app.io_utils import read_json_safe, write_json_atomic  # noqa: E402
+from app.paths import DATA_DIR, SYNC_ALERT_STATE  # noqa: E402
+from app.settings import settings  # noqa: E402
 
 from notion_sync.activity import (
     frozen_pairs_for_collection,
@@ -240,7 +249,7 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
 
     Returns the number of decisions applied (incl. Keep both no-ops).
     """
-    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    db_id = settings.notion_sync_activity_db_id
     filt = {"and": [
         {"property": "collection", "select": {"equals": collection}},
         {"property": "applied_at", "date":   {"is_empty": True}},
@@ -632,7 +641,7 @@ def cleanup_resolved_activity(nc: NotionClient, *, days: int = 90) -> int:
     so the user can un-archive in Notion to recover a row if needed.
     Returns the number archived.
     """
-    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    db_id = settings.notion_sync_activity_db_id
     cutoff = (datetime.now(timezone.utc).date() - timedelta(days=days)).isoformat()
     rows = nc.query_database(db_id, filter_={"and": [
         {"property": "applied_at", "date": {"is_not_empty": True}},
@@ -665,7 +674,7 @@ def notify_pending(nc: NotionClient) -> int:
 
     Returns the Pending count regardless of whether a session was made.
     """
-    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    db_id = settings.notion_sync_activity_db_id
     rows = nc.query_database(db_id, filter_={"and": [
         {"property": "decision",   "select": {"equals": "Pending"}},
         {"property": "applied_at", "date":   {"is_empty": True}},
@@ -683,19 +692,13 @@ def notify_pending(nc: NotionClient) -> int:
     md = _render_pending_markdown(rows)
 
     try:
-        # Lazy imports — keep runner usable in environments where
-        # the phone-bridge db module isn't on sys.path.
-        import sys as _sys
-        from pathlib import Path as _Path
-        repo_root = _Path(__file__).resolve().parents[1]
-        _sys.path.insert(0, str(repo_root))
+        # Lazy import — keep runner usable in environments where
+        # the phone-bridge db module isn't already on sys.path.
         import db  # type: ignore
         # The bridge sqlite path matches server.py's wiring.
-        db_root = _Path(os.environ.get("BRIDGE_DATA_DIR",
-                                        str(repo_root / ".bridge_data")))
-        db.init(db_root / "bridge.db")
+        db.init(DATA_DIR / "bridge.db")
         sid = db.create_session(
-            cwd=os.environ.get("DEFAULT_CWD", "/home/dev"),
+            cwd=settings.default_cwd or "/home/dev",
             title=title[:80], mode="chat", model="",
         )
         db.append_message(sid, "assistant_text", {"text": md})
@@ -745,15 +748,14 @@ def _render_pending_markdown(rows: list[dict]) -> str:
 
 
 def _alert_state_path() -> str:
-    root = os.environ.get("BRIDGE_DATA_DIR", ".bridge_data")
-    return os.path.join(root, _ALERT_STATE_FILE)
+    # Kept for back-compat with anything that imports it; new code uses
+    # app.paths.SYNC_ALERT_STATE directly.
+    return str(SYNC_ALERT_STATE)
 
 
 def _alert_already_sent(current_ids: list[str]) -> bool:
-    try:
-        with open(_alert_state_path(), encoding="utf-8") as f:
-            state = _json.load(f)
-    except (OSError, ValueError):
+    state = read_json_safe(SYNC_ALERT_STATE, default=None)
+    if not state:
         return False
     last_ts = float(state.get("last_alert_ts") or 0)
     last_ids = state.get("last_pending_ids") or []
@@ -768,11 +770,8 @@ def _save_alert_state(current_ids: list[str]) -> None:
         "last_alert_ts":     datetime.now(timezone.utc).timestamp(),
         "last_pending_ids":  list(current_ids),
     }
-    path = _alert_state_path()
     try:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            _json.dump(state, f, ensure_ascii=False, indent=2)
+        write_json_atomic(SYNC_ALERT_STATE, state)
     except OSError:
         pass
 

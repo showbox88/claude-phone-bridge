@@ -27,6 +27,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.paths import DATA_DIR
+from app.settings import settings
 from notion_sync.activity import write_possible_duplicate
 from notion_sync.backup import backup_collections
 from notion_sync.matching import best_match
@@ -216,13 +218,13 @@ def main() -> int:
     pb = PBClient()
     nc = NotionClient()
 
-    if not os.environ.get("NOTION_SYNC_ACTIVITY_DB_ID"):
+    if not settings.notion_sync_activity_db_id:
         print("error: NOTION_SYNC_ACTIVITY_DB_ID not set — run "
               "scripts/setup_notion_sync_db.py first")
         return 1
 
     if not args.dry_run:
-        backup_root = Path(os.environ.get("BRIDGE_DATA_DIR", ".bridge_data")) / "backups"
+        backup_root = DATA_DIR / "backups"
         out = backup_collections(pb, backup_root)
         print(f"PB backup written: {out}")
 

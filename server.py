@@ -58,6 +58,9 @@ from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.provisioner import provision_notion_db
 
+from app.paths import AUTH_FILE, BRIDGE_ROOT
+from app.settings import settings
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("bridge")
@@ -71,9 +74,9 @@ import urllib.request, urllib.error, urllib.parse  # noqa: E401
 import datetime as _dt
 import hashlib as _hashlib
 
-POCKETBASE_URL = os.environ.get("POCKETBASE_URL", "").rstrip("/")
-POCKETBASE_ADMIN_EMAIL = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
-POCKETBASE_ADMIN_PASSWORD = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
+POCKETBASE_URL = settings.pocketbase_url
+POCKETBASE_ADMIN_EMAIL = settings.pocketbase_admin_email
+POCKETBASE_ADMIN_PASSWORD = settings.pocketbase_admin_password
 
 
 def _pb_refresh_token() -> bool:
@@ -92,6 +95,10 @@ def _pb_refresh_token() -> bool:
         )
         with urllib.request.urlopen(req, timeout=10) as r:
             data = json.loads(r.read())
+            # NOTE: writes to os.environ — child Bash subprocesses
+            # spawned by Claude SDK inherit and pick up the refreshed
+            # token. Phase 1 (PB client unification) moves token
+            # management into app/integrations/pb/client.py.
             os.environ["PB_TOKEN"] = data["token"]
             os.environ["PB_URL"] = POCKETBASE_URL
             log.info("PB token refreshed (len=%d)", len(data["token"]))
@@ -184,7 +191,7 @@ MAX_SHEET_ROWS_PER_SHEET = 200   # cap rows when converting xlsx to CSV-like tex
 class AppState:
     client: ClaudeSDKClient | None = None
     cwd_root: Path = field(
-        default_factory=lambda: Path(os.environ.get("DEFAULT_CWD") or os.getcwd()).resolve()
+        default_factory=lambda: Path(settings.default_cwd or os.getcwd()).resolve()
     )
     cwd: Path = field(init=False)
     websockets: set[WebSocket] = field(default_factory=set)
@@ -774,7 +781,7 @@ app = FastAPI(lifespan=lifespan)
 # Allow cross-origin requests so a phone-side PWA loaded from any PC can talk
 # to any other PC's bridge over Tailscale. The user's auth/security model is
 # Tailscale tailnet itself (only your own devices can route to these hosts).
-_origins_env = os.environ.get("ALLOWED_ORIGINS", "*")
+_origins_env = settings.allowed_origins
 _allowed_origins = ["*"] if _origins_env.strip() == "*" else [
     o.strip() for o in _origins_env.split(",") if o.strip()
 ]
@@ -796,10 +803,10 @@ app.add_middleware(
 # cookie. WebSocket auth is enforced inside the /ws handler.
 # ============================================================================
 
-_AUTH_FILE = Path(os.environ.get(
-    "BRIDGE_AUTH_FILE", str(Path(__file__).resolve().parent / ".bridge_auth.json")
-))
-_COOKIE_DAYS = int(os.environ.get("BRIDGE_COOKIE_DAYS", "30"))
+_AUTH_FILE = Path(settings.bridge_auth_file) if settings.bridge_auth_file else (
+    Path(__file__).resolve().parent / ".bridge_auth.json"
+)
+_COOKIE_DAYS = settings.bridge_cookie_days
 _COOKIE_SECONDS = _COOKIE_DAYS * 86400
 auth_state = auth_mod.AuthState(_AUTH_FILE)
 
@@ -963,7 +970,7 @@ async def setup_verify_get():
     if not auth_state.is_initialized() or auth_state.list_devices():
         return RedirectResponse("/login", status_code=303)
     secret = auth_state.totp_secret() or ""
-    label = os.environ.get("BRIDGE_NAME") or socket.gethostname()
+    label = settings.bridge_name or socket.gethostname()
     uri = auth_mod.otpauth_uri(secret, label=label, issuer="Phone Bridge")
     qr = auth_mod.qr_svg(uri)
     # Pretty 4-char chunks for manual entry
@@ -1148,7 +1155,7 @@ async def api_health(request: Request):
     if auth_state.is_initialized() and _current_device(request) is None:
         return base
     base.update({
-        "name": os.environ.get("BRIDGE_NAME") or socket.gethostname(),
+        "name": settings.bridge_name or socket.gethostname(),
         "cwd_root": str(state.cwd_root).replace("\\", "/"),
         "session_id": state.session_id,
         "mode": state.mode,
@@ -1176,6 +1183,9 @@ def _pb_get_json(path: str) -> dict:
     _PBError on persistent failure."""
     if not POCKETBASE_URL:
         raise _PBError("PocketBase not configured")
+    # PB_TOKEN comes from os.environ (side-channel set by _pb_refresh_token);
+    # cannot use app.settings.pb_token because that's frozen at import time.
+    # Phase 1 (PB client unification) moves token management out of os.environ.
     token = os.environ.get("PB_TOKEN", "")
     url = POCKETBASE_URL + path
     last_err: Exception | None = None
@@ -1224,16 +1234,13 @@ def _today_signature(items: list[dict]) -> str:
 
 
 def _load_today_ack() -> dict:
-    try:
-        return json.loads(_today_ack_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    from app.io_utils import read_json_safe
+    return read_json_safe(_today_ack_path(), default={})
 
 
 def _save_today_ack(d: dict) -> None:
-    p = _today_ack_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(d), encoding="utf-8")
+    from app.io_utils import write_json_atomic
+    write_json_atomic(_today_ack_path(), d, indent=None)
 
 
 @app.get("/api/today-todos")
@@ -1265,7 +1272,7 @@ async def api_today_todos_ack(body: dict):
     if not sig:
         raise HTTPException(400, "missing signature")
     await asyncio.to_thread(_save_today_ack,
-        {"signature": sig, "at": _dt.datetime.now().isoformat()})
+        {"signature": sig, "at": _dt.datetime.now(_dt.timezone.utc).isoformat()})
     return {"ok": True}
 
 
@@ -1309,7 +1316,7 @@ async def mcp_oauth_authorization_server_metadata():
 
 @app.get("/api/vapid-public-key")
 async def get_vapid_key():
-    return {"key": os.environ.get("VAPID_PUBLIC_KEY", "")}
+    return {"key": settings.vapid_public_key}
 
 
 @app.post("/api/subscribe")
@@ -1716,11 +1723,12 @@ async def api_sync_targets_create(body: dict | None = None):
 
 
 async def _spawn_reconcile_initial(collection: str) -> None:
+    import sys
     try:
         proc = await asyncio.create_subprocess_exec(
-            "/home/dev/phone-bridge/.venv/bin/python",
+            sys.executable,
             "scripts/reconcile_initial.py", "--only", collection,
-            cwd="/home/dev/phone-bridge",
+            cwd=str(BRIDGE_ROOT),
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
@@ -1793,11 +1801,12 @@ async def api_sync_targets_delete(collection: str):
 async def api_sync_registry_export_snapshot():
     """Run scripts/dump_sync_registry.py and return the output path."""
     out_path = "notion_sync/registry.snapshot.yaml"
-    cmd = ["/home/dev/phone-bridge/.venv/bin/python",
+    import sys
+    cmd = [sys.executable,
             "scripts/dump_sync_registry.py", "--path", out_path]
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd, cwd="/home/dev/phone-bridge",
+            *cmd, cwd=str(BRIDGE_ROOT),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
@@ -1906,7 +1915,7 @@ async def _foursquare_query(lat: float, lng: float, radius_m: int) -> list[dict]
     Foursquare has good US/global commercial coverage where OSM is sparse.
     Endpoint: https://places-api.foursquare.com/places/search
     """
-    key = os.environ.get("FOURSQUARE_KEY", "").strip()
+    key = settings.foursquare_key.strip()
     if not key:
         return []
     import aiohttp
@@ -1974,7 +1983,7 @@ async def _foursquare_query(lat: float, lng: float, radius_m: int) -> list[dict]
 
 async def _amap_query(lat: float, lng: float, radius_m: int) -> list[dict]:
     """Query 高德 Web API /place/around. Requires AMAP_KEY env."""
-    key = os.environ.get("AMAP_KEY", "").strip()
+    key = settings.amap_key.strip()
     if not key:
         return []
     import aiohttp
@@ -2394,7 +2403,7 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "server:app",
-        host=os.environ.get("HOST", "127.0.0.1"),
-        port=int(os.environ.get("PORT", "8000")),
+        host=settings.host,
+        port=settings.port,
         log_level="info",
     )

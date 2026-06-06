@@ -6,7 +6,15 @@ pipeline columns and the right Notion property type for every PB field.
 """
 from __future__ import annotations
 
-import os
+import sys
+from pathlib import Path as _Path
+
+# Subprocess-safe import of app.settings.
+sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+from app.settings import Settings  # noqa: E402
+
+# Construct on each call instead of caching: provisioner runs rarely and
+# tests use monkeypatch.setenv which can't reach a module-level singleton.
 
 from notion_sync.codec import snake_to_title
 from notion_sync.config import load_all
@@ -85,7 +93,7 @@ def provision_notion_db(
     parent_page_id: str | None = None,
 ) -> str:
     """Create a Notion database mirroring the PB collection schema."""
-    parent_page_id = parent_page_id or os.environ.get("NOTION_SYNC_PARENT_PAGE_ID", "")
+    parent_page_id = parent_page_id or Settings().notion_sync_parent_page_id
     if not parent_page_id:
         raise RuntimeError("NOTION_SYNC_PARENT_PAGE_ID not set")
 
@@ -136,7 +144,7 @@ def add_collection_to_sync_activity(
     nc: NotionClient, *, collection: str
 ) -> None:
     """PATCH Sync Activity DB to include `collection` as a select option."""
-    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    db_id = Settings().notion_sync_activity_db_id
     db = nc.retrieve_database(db_id)
     options = db["properties"]["collection"]["select"]["options"]
     if any(o.get("name") == collection for o in options):

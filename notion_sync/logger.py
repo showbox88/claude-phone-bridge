@@ -10,15 +10,20 @@ review snapshots and pick a winner.
 from __future__ import annotations
 
 import json
-import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# notion_sync runs as a subprocess via `python -m notion_sync.runner`;
+# add the parent dir to sys.path so `app` is importable. Phase 2 cleans
+# this up by moving everything under app/.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.paths import SYNC_LOG  # noqa: E402
+
 
 def _log_path() -> Path:
-    root = Path(os.environ.get("BRIDGE_DATA_DIR", ".bridge_data"))
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "sync.log"
+    SYNC_LOG.parent.mkdir(parents=True, exist_ok=True)
+    return SYNC_LOG
 
 
 def log_event(event: str, **fields) -> None:
