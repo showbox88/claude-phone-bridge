@@ -33,7 +33,7 @@
 
 | Phase | 状态 | 分支 | 完成日期 | Commit SHA | 报告位置 |
 |---|---|---|---|---|---|
-| -1 护栏 | 🚧 进行中 | `refactor/phase-minus1-guardrails` | — | — | — |
+| -1 护栏 | ✅ 已合并 | `refactor/phase-minus1-guardrails` | 2026-06-06 | `3e60173` | CHANGELOG §Phase -1 |
 | 0 地基 | ⏳ 待开始 | `refactor/phase-0-foundation` | — | — | — |
 | 1 PB 统一 | ⏳ 待开始 | `refactor/phase-1-pb-client` | — | — | — |
 | 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
@@ -46,7 +46,7 @@
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase -1 · 护栏
+👉 **下一步执行**：Phase 0 · 地基
 
 下次开新窗口直接说"继续重构路线图"或贴这一行即可。
 
