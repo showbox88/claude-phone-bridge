@@ -212,5 +212,5 @@ def resolve_tz(*, stop=None, day=None, lat=None, lng=None,
 
 ## Open Items（2026-06-05 上线后）
 
-- **Notion DB schema 还差几列**：5 个表的 `Timezone` text 列 + `todos` 的 `Due At` / `Due Tz` 还没在 Notion 一侧加上。已部署的代码只在 sync 时把 datetime 渲染成带 offset 的 ISO（这部分已端到端验证 ✓ — `PB checkin=2026-06-04 13:07Z` + `tz=America/New_York` → Notion 显示 `2026-06-04T09:07:00.000-04:00`）。要把 IANA 文字本身和 todos 的 due_* 也显示出来，需要进 phone-bridge 同步设置 UI，对每个 collection 触发一次 schema 拉取（provisioner 会自动 diff & 补列）。
+- ~~**Notion DB schema 还差几列**~~ ✓ **已解决（2026-06-05）**：通过对 6 个 Notion DB 直接 PATCH 加列 + 对 stops 已存在的 page 反推 Timezone 值，4 个表（locations / stops / days / expenses）都已验证 Notion `Timezone` 列 = PB `timezone`。foods 表当前空。todos 已加 `Due At` + `Due Tz` 列（待用户首次创建带提醒的 todo 时填充）。
 - **Agent 端到端 smoke**：用户在 phone-bridge 跟 agent 说"明天3点提醒我"产出正确的 `todos.due_at + due_tz` —— 部署完成，但只有用户在自己手机/浏览器跟 phone-bridge 对话才能触发，没在 CI 里跑。
