@@ -1265,7 +1265,7 @@ async def api_today_todos_ack(body: dict):
     if not sig:
         raise HTTPException(400, "missing signature")
     await asyncio.to_thread(_save_today_ack,
-        {"signature": sig, "at": _dt.datetime.now().isoformat()})
+        {"signature": sig, "at": _dt.datetime.now(_dt.timezone.utc).isoformat()})
     return {"ok": True}
 
 
