@@ -34,7 +34,7 @@
 | Phase | 状态 | 分支 | 完成日期 | Commit SHA | 报告位置 |
 |---|---|---|---|---|---|
 | -1 护栏 | ✅ 已合并 | `refactor/phase-minus1-guardrails` | 2026-06-06 | `3e60173` | CHANGELOG §Phase -1 |
-| 0 地基 | 🚧 已部署 待合并 | `refactor/phase-0-foundation` | 2026-06-06 | `a4994f9`（tip） | CHANGELOG §Phase 0 |
+| 0 地基 | ✅ 已合并 | `refactor/phase-0-foundation` | 2026-06-06 | `df169fe` | CHANGELOG §Phase 0 |
 | 1 PB 统一 | ⏳ 待开始 | `refactor/phase-1-pb-client` | — | — | — |
 | 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
 | 3 Session 多实例 | ⏳ 待开始 | `refactor/phase-3-session-manager` | — | — | — |
