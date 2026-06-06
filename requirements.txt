@@ -170,8 +170,12 @@ python-multipart==0.0.32
     # via mcp
 pywebpush==2.3.0
     # via -r requirements.in
-pywin32==312
+pywin32==312 ; sys_platform == 'win32'
     # via mcp
+    # NOTE: marker added manually after pip-compile — pip-compile strips
+    # platform markers when compiled on Windows; pywin32 is win32-only and
+    # breaks Linux installs without the conditional. Re-add this marker if
+    # you re-compile the lockfile from a Windows host.
 pyyaml==6.0.3
     # via uvicorn
 referencing==0.37.0
