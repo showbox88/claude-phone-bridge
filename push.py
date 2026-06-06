@@ -3,38 +3,35 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
-from pathlib import Path
 
 from pywebpush import WebPushException, webpush
 
+from app.io_utils import read_json_safe, write_json_atomic
+from app.paths import PUSH_SUBS
+from app.settings import settings
+
 log = logging.getLogger("push")
 
-SUBS_FILE = Path(__file__).parent / "push_subs.json"
+SUBS_FILE = PUSH_SUBS
 _lock = threading.Lock()
 
 
 def _vapid_claims() -> dict:
-    return {"sub": f"mailto:{os.environ.get('VAPID_EMAIL', 'unknown@example.com')}"}
+    return {"sub": f"mailto:{settings.vapid_email}"}
 
 
 def init() -> None:
     if not SUBS_FILE.exists():
-        SUBS_FILE.write_text("[]", encoding="utf-8")
+        write_json_atomic(SUBS_FILE, [])
 
 
 def load_subs() -> list[dict]:
-    if not SUBS_FILE.exists():
-        return []
-    try:
-        return json.loads(SUBS_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []
+    return read_json_safe(SUBS_FILE, default=[])
 
 
 def _save(subs: list[dict]) -> None:
-    SUBS_FILE.write_text(json.dumps(subs, indent=2), encoding="utf-8")
+    write_json_atomic(SUBS_FILE, subs)
 
 
 def add_sub(sub: dict) -> None:
@@ -59,7 +56,7 @@ def remove_sub(sub: dict) -> None:
 
 def send_to_all(title: str, body: str, tag: str | None = None) -> None:
     """Send a push to every subscriber. Failures are logged, dead subs pruned."""
-    private_key = os.environ.get("VAPID_PRIVATE_KEY", "").strip()
+    private_key = settings.vapid_private_key.strip()
     if not private_key:
         log.warning("VAPID_PRIVATE_KEY not set, skipping push")
         return

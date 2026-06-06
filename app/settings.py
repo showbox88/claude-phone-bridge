@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     # Push
     vapid_public_key: str = ""
     vapid_private_key: str = ""
+    vapid_email: str = "unknown@example.com"
 
     # POI
     foursquare_key: str = ""
