@@ -33,7 +33,7 @@
 
 | Phase | 状态 | 分支 | 完成日期 | Commit SHA | 报告位置 |
 |---|---|---|---|---|---|
-| -1 护栏 | ⏳ 待开始 | `refactor/phase-minus1-guardrails` | — | — | — |
+| -1 护栏 | 🚧 进行中 | `refactor/phase-minus1-guardrails` | — | — | — |
 | 0 地基 | ⏳ 待开始 | `refactor/phase-0-foundation` | — | — | — |
 | 1 PB 统一 | ⏳ 待开始 | `refactor/phase-1-pb-client` | — | — | — |
 | 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
