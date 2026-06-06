@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     # Notion sync
     notion_token: str = ""
     notion_sync_activity_db_id: str = ""
+    notion_sync_parent_page_id: str = ""
 
     # mcp_pb
     mcp_pb_host: str = "127.0.0.1"
