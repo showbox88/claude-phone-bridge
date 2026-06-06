@@ -1224,16 +1224,13 @@ def _today_signature(items: list[dict]) -> str:
 
 
 def _load_today_ack() -> dict:
-    try:
-        return json.loads(_today_ack_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    from app.io_utils import read_json_safe
+    return read_json_safe(_today_ack_path(), default={})
 
 
 def _save_today_ack(d: dict) -> None:
-    p = _today_ack_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(d), encoding="utf-8")
+    from app.io_utils import write_json_atomic
+    write_json_atomic(_today_ack_path(), d, indent=None)
 
 
 @app.get("/api/today-todos")
