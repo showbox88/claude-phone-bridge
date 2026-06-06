@@ -14,12 +14,12 @@ Run:
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.settings import settings
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 
@@ -98,7 +98,7 @@ def add_pipeline_columns(nc: NotionClient, db_id: str) -> None:
 
 
 def find_or_create_activity_db(nc: NotionClient, parent_page_id: str) -> str:
-    existing = os.environ.get("NOTION_SYNC_ACTIVITY_DB_ID")
+    existing = settings.notion_sync_activity_db_id
     if existing:
         try:
             nc.retrieve_database(existing)
@@ -175,7 +175,7 @@ def seed_sync_config(pb: PBClient) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--parent-page-id",
-                    default=os.environ.get("NOTION_SYNC_PARENT_PAGE_ID"),
+                    default=settings.notion_sync_parent_page_id or None,
                     help="Notion page under which Sync Activity DB is created")
     args = ap.parse_args()
     if not args.parent_page_id:
