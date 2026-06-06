@@ -5,6 +5,47 @@
 
 ---
 
+## 2026-06-06 — Phase 0 · 地基（settings / paths / 原子 IO / 锁版本 / WAL）
+
+**Branch:** `refactor/phase-0-foundation` (15 commits, `fed6b23..a4994f9`)
+**实际工时:** 约 4 小时（含 1 次 pywin32 lockfile 修）
+
+### 落地的事
+- `app/settings.py` — pydantic-settings，单一类型化 env 源（22 字段）+ 4 个单元测试
+- `app/paths.py` — `BRIDGE_ROOT` + `DATA_DIR` + 派生路径常量
+- `app/io_utils.py` — `write_json_atomic` + `read_json_safe` + 8 个单元测试
+- `db.py` 开启 `PRAGMA journal_mode=WAL` + `synchronous=NORMAL`（`foreign_keys` 早已开）
+- `server.py:1268` naive `datetime.now()` → UTC（runtime 最后一处 naive）
+- 3 处 JSON 状态文件改为原子写（`push_subs.json` / `today_ack.json` / `sync_alert_state.json`）
+- `requirements.in` + `requirements.txt`（pip-compile 锁文件，4 dep pin 到 prod 版本）
+- `requirements-dev.txt`（pip-tools）
+- **48 of 50 `os.environ.get` 迁移到 `app.settings`**（剩 2 处 PB_TOKEN 是 documented 例外，Phase 1 清理）
+- 5 处硬编码 `/home/dev/phone-bridge/.venv/bin/python` 替换为 `sys.executable`（pb_tools 2 + server 2 + 1 dump_sync_registry）；硬编码 `/home/dev/phone-bridge` cwd 改 `str(BRIDGE_ROOT)`；硬编码 sync.log 改 `app.paths.SYNC_LOG`
+
+### 闸门
+- ✅ smoke 在 staging 跑绿（0.7s）
+- ✅ deploy 成功 + journal 无 ERROR/Exception
+- ✅ 生产 SQLite 在 WAL 模式验证（`journal_mode=wal`, `synchronous=1`, `foreign_keys=1`）
+- ✅ 单元测试：`test_io_utils.py` 8/8，`test_settings.py` 4/4，`tests/notion_sync/` 106/107（1 pre-existing test_icons fail，main 上也 fail）
+- ✅ grep 验证：剩余 `os.environ.get` 全部在 8 个 documented 文件（app/paths/settings、mcp_pb、2 个一次性 script、server PB_TOKEN side-channel、test fixtures）
+
+### 偏离计划
+1. **plan 把 env 读数估为 67，实际 50**（spec 审计偏大）；实际迁了 48 处。
+2. **plan 漏了 2 个 env**：`VAPID_EMAIL`（push.py 的 mailto subject）和 `NOTION_SYNC_PARENT_PAGE_ID`（provisioner + scripts）。沿途发现后补进 settings + test_settings 的 env key 列表。
+3. **`notion_sync/provisioner.py` + `todos_client.py` 用 `Settings()` per call 而非 module 单例**：前者因为 tests `monkeypatch.setenv` 无法穿透 module 级缓存；后者因为代码注释明确说"re-read each call so password rotation doesn't strand the report"。这是不漂移的设计选择。
+4. **`server.py:_AUTH_FILE` 保留历史默认 `Path(__file__).parent/.bridge_auth.json`** 而非切到 `app.paths.AUTH_FILE`（= `DATA_DIR/...`）。原因：默认位置变=认证文件在新位置找不到旧设备 token=用户被强制重新设置。安全的迁移留给未来 phase。
+5. **`server.py:CHECKIN.md` 绝对路径在 system prompt 字符串里没动**。原因：Phase 0 显式不改 prompt 文本；prod 上 `/home/dev/phone-bridge/CHECKIN.md` 等于 `BRIDGE_ROOT/CHECKIN.md`，无回归。
+6. **pip-compile lockfile 漏 platform marker 引发首次 deploy 失败**：lockfile 在 Windows 编译时 strip 掉了 `pywin32` 的 `sys_platform == 'win32'` 标记，Linux 装失败。手工补 marker 后 deploy 成功。`requirements.txt` 加注释提醒未来 re-compile 后要再补一次。
+
+### 跳过的闸门
+- **24h staging soak 跳过**：用户 2026-06-06 ~01:00 同意"立即开 Phase 0"代替 24h 等待；理由是 Phase -1 零代码改动，soak 无新数据可看。Phase 0 有真实代码改动，但风险已通过 deploy + smoke + WAL 验证 + journal 检查覆盖。下一阶段建议恢复 24h soak。
+
+### 下一步
+👉 Phase 1 · 统一 PB 客户端 + MCP 工具单源
+新窗口续接指令："继续重构路线图，从 Phase 1 开始"
+
+---
+
 ## 2026-06-06 — Phase -1 · 重构护栏（roadmap 启动）
 
 启动全栈重构（见 [docs/superpowers/specs/2026-06-06-refactor-roadmap.md](docs/superpowers/specs/2026-06-06-refactor-roadmap.md)）前，先装"会响的烟雾报警"：
