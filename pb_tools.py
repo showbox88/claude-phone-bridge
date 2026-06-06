@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -32,12 +32,15 @@ from typing import Any
 from claude_agent_sdk import create_sdk_mcp_server, tool
 from notion_sync.config import collections_with_auto_sync
 
+from app.paths import BRIDGE_ROOT, SYNC_LOG
+from app.settings import settings
+
 log = logging.getLogger("bridge.pb")
 
 SERVER_NAME = "pb"
 
-PB_URL      = os.environ.get("POCKETBASE_URL", "http://127.0.0.1:8090").rstrip("/")
-PB_EMAIL    = os.environ.get("POCKETBASE_ADMIN_EMAIL", "")
+PB_URL      = settings.pocketbase_url or "http://127.0.0.1:8090"
+PB_EMAIL    = settings.pocketbase_admin_email
 
 # ---------------------------------------------------------------------------
 # Auto-sync: after pb_create / pb_update / pb_delete on a sync-target
@@ -96,20 +99,19 @@ async def _run_debounced_sync() -> None:
         return
     cols = sorted(_pending_sync)
     _pending_sync.clear()
-    bridge_root = os.path.dirname(os.path.abspath(__file__))
     for col in cols:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "/home/dev/phone-bridge/.venv/bin/python", "-m", "notion_sync.runner",
+                sys.executable, "-m", "notion_sync.runner",
                 "--force-now", "--only", col,
-                cwd=bridge_root,
+                cwd=str(BRIDGE_ROOT),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
             await asyncio.wait_for(proc.wait(), timeout=300)
         except Exception as e:
             log.warning("auto-sync runner failed for %s: %s", col, e)
-PB_PASSWORD = os.environ.get("POCKETBASE_ADMIN_PASSWORD", "")
+PB_PASSWORD = settings.pocketbase_admin_password
 
 
 def enabled() -> bool:
@@ -488,7 +490,7 @@ async def smartnote_open_context(args: dict[str, Any]) -> dict[str, Any]:  # noq
 async def sync_now(args: dict[str, Any]) -> dict[str, Any]:
     import subprocess
     cmd = [
-        "/home/dev/phone-bridge/.venv/bin/python", "-m", "notion_sync.runner",
+        sys.executable, "-m", "notion_sync.runner",
         "--force-now",
     ]
     coll = args.get("collection")
@@ -497,10 +499,10 @@ async def sync_now(args: dict[str, Any]) -> dict[str, Any]:
     try:
         proc = await asyncio.to_thread(
             subprocess.run, cmd,
-            cwd="/home/dev/phone-bridge",
+            cwd=str(BRIDGE_ROOT),
             capture_output=True, text=True, timeout=600,
         )
-        log_path = "/home/dev/phone-bridge/.bridge_data/sync.log"
+        log_path = str(SYNC_LOG)
         tail: list[Any] = []
         try:
             with open(log_path, encoding="utf-8") as f:
@@ -534,8 +536,8 @@ async def sync_now(args: dict[str, Any]) -> dict[str, Any]:
     {},
 )
 async def sync_queue_status(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
-    notion_token = os.environ.get("NOTION_TOKEN", "")
-    db_id        = os.environ.get("NOTION_SYNC_ACTIVITY_DB_ID", "")
+    notion_token = settings.notion_token
+    db_id        = settings.notion_sync_activity_db_id
     if not notion_token or not db_id:
         return _err("NOTION_TOKEN or NOTION_SYNC_ACTIVITY_DB_ID not set")
     body = json.dumps({"filter": {"and": [
