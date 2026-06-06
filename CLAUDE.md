@@ -44,6 +44,8 @@ deploy
 1. Tars the project (excluding `.venv`, `.bridge_uploads`, `.bridge_data`, `.env`)
 2. Uploads to `/home/dev/phone-bridge`
 3. Recreates `.venv` if missing, runs `pip install -r requirements.txt`
+   (the lockfile — to upgrade a dep, edit `requirements.in` then
+   `python -m piptools compile --output-file requirements.txt --strip-extras requirements.in`)
 4. `sudo systemctl restart phone-bridge`
 5. Hits `https://dashboard-server.tail4cfa2.ts.net/api/health`
 

@@ -1,0 +1,35 @@
+# Phone Bridge runtime "want list".
+#
+# Compile to requirements.txt (lockfile) with:
+#   python -m piptools compile --output-file requirements.txt --strip-extras requirements.in
+#
+# Policy:
+#   - Use `==` for things we deliberately want pinned (matches current prod, or
+#     a known-good version we explicitly chose).
+#   - Use `>=` for things we're willing to track latest-compatible at recompile time.
+#   - During refactor phases (see CLAUDE.md §Refactor period rules) we pin
+#     anything that drifted from prod, so Phase boundaries don't quietly ship a
+#     dep upgrade alongside the refactor.
+
+# Pinned to current prod (2026-06-06) — refactor period, do not upgrade silently.
+aiohttp==3.13.5
+claude-agent-sdk==0.2.87
+fastapi==0.136.1
+uvicorn[standard]==0.46.0
+
+# These happen to match prod; keep flexible for now.
+python-dotenv>=1.0
+pywebpush>=2.0
+cryptography>=42.0
+openpyxl>=3.1
+bcrypt>=4.1
+pyotp>=2.9
+segno>=1.6
+
+# Weekly-report email digest (Gmail readonly + auto token refresh)
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+google-api-python-client>=2.130
+
+# Timezone resolution from GPS coordinates (offline polygon lookup)
+timezonefinder>=6.5

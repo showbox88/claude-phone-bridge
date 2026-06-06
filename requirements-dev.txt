@@ -1,0 +1,5 @@
+# Local development dependencies. Installed with:
+#   pip install -r requirements-dev.txt
+# Not shipped to production (deploy only runs `pip install -r requirements.txt`).
+
+pip-tools>=7.4
