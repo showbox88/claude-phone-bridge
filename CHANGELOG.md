@@ -5,6 +5,32 @@
 
 ---
 
+## 2026-06-06 — Phase -1 · 重构护栏（roadmap 启动）
+
+启动全栈重构（见 [docs/superpowers/specs/2026-06-06-refactor-roadmap.md](docs/superpowers/specs/2026-06-06-refactor-roadmap.md)）前，先装"会响的烟雾报警"：
+
+- **后端 smoke**：`tests/smoke_backend.py`（stdlib + websockets，1.2s 跑完），验证 `/api/health` `/api/meta` `/api/sessions` `/api/today-todos` + WS hello 帧
+- **回滚演练**：实地跑了一遍 `.bak.*` swap 路径，**1 分 18 秒**端到端验证完成（含两次 ~5s 重启 + 两次 smoke）；文档 [docs/operations/rollback.md](docs/operations/rollback.md) 已校准
+- **CLAUDE.md** 加 §Refactor period rules：main 只接受 `refactor:/docs:` commit，每阶段独立 `refactor/phase-N-*` 分支 + smoke 闸门 + staging 24/48h soak
+- **baseline 截图清单**：[tests/baseline/README.md](tests/baseline/README.md)（13 张），实际截图延后到 Phase 4 之前再做（Phase 0~3 不动前端，不阻塞）
+
+### 闸门状态
+- ✅ smoke 在 staging 跑绿（1.2s）
+- ✅ 回滚演练 1m18s 完成验证
+- ✅ CLAUDE.md 规则可见（3 处引用）
+- ⚠️ baseline 截图：0 张（延后到 Phase 4 前；前 4 个阶段不触前端）
+
+### 偏离计划
+1. **playwright 前端 smoke 降级为手动 baseline 截图**：原 spec 提"headless playwright smoke"，writing-plans 阶段降级为手动截图清单。理由：playwright 在 Windows 装一遍占掉 Phase -1 80% 工时；Phase 0~3 不触前端，截图足够；真要 playwright 留到 Phase 4。
+2. **smoke 写完后发现 2 处端点字段假设错**：`/api/health` 字段是 `ok` 不是 `status`；`/api/meta` 返回 `modes/models` 复数列表不是 `mode/model`。已修正。这正是护栏的价值。
+3. **回滚机制描述被修正**：原文档写"git checkout + deploy"路径，演练时发现 deploy 内置 `.bak.*` swap 是真正的快速路径（~7s vs 全量 deploy ~14s）。rollback.md 重写为两条路径并存：快速路径 + 可复现路径。
+
+### 下一步
+👉 **Phase 0 · 地基**（settings / paths / 原子 IO / 锁版本，1~2 天）
+新窗口续接指令："继续重构路线图，从 Phase 0 开始"
+
+---
+
 ## 2026-06-05 — Expenses redesign（transactions → expenses，stops 的子表）
 
 - **背景**：原本 `transactions`（migration 11）和 `stops` 都能记金额——日常消费走 transactions，旅行消费挂在 stop.amount。两个口子，做月度汇总/年报/旅游 vs 日常对比时数据是分裂的。同时一次 visit 可能多笔花销（公园 = 门票 + 冰淇淋 + 水），单字段 stop.amount 表达不了。
