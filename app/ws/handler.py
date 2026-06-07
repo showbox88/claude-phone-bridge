@@ -12,10 +12,6 @@ HTTP middleware doesn't run on WS, so the cookie check happens inside
 
 `handle_cmd` covers the 9 client-driven commands (new/load/delete/rename/
 switch-workspace/auto-approve/model/cwd/cancel).
-
-BRIDGE_RECORD=1 hooks: when active, monkey-patch this instance's
-send_text/receive_text to push frames into the Recorder. Removed at end
-of Phase 2 (Task 16 of the plan).
 """
 from __future__ import annotations
 
@@ -43,14 +39,6 @@ log = logging.getLogger("bridge")
 router = APIRouter()
 
 
-def _recorder():
-    # Lazy lookup so server.py's BRIDGE_RECORD-init runs first. Returns
-    # the Recorder instance or None; the wrapper functions below check
-    # the result on every call.
-    import server
-    return getattr(server, "_recorder", None)
-
-
 @router.websocket("/ws")
 async def ws_handler(ws: WebSocket):
     # WebSocket bypasses HTTP middleware, so check the session cookie here.
@@ -61,23 +49,6 @@ async def ws_handler(ws: WebSocket):
             await ws.close(code=4401)
             return
     await ws.accept()
-    rec = _recorder()
-    if rec:
-        rec.ws_open()
-        _orig_send = ws.send_text
-        _orig_recv = ws.receive_text
-
-        async def _rec_send(text):
-            await _orig_send(text)
-            rec.ws_frame("out", text)
-
-        async def _rec_recv():
-            text = await _orig_recv()
-            rec.ws_frame("in", text)
-            return text
-
-        ws.send_text = _rec_send  # type: ignore[method-assign]
-        ws.receive_text = _rec_recv  # type: ignore[method-assign]
     state.websockets.add(ws)
     log.info("websocket connected (total=%d)", len(state.websockets))
     try:
@@ -119,8 +90,6 @@ async def ws_handler(ws: WebSocket):
         pass
     finally:
         state.websockets.discard(ws)
-        if rec:
-            rec.ws_close(None)
         log.info("websocket closed (remaining=%d)", len(state.websockets))
 
 

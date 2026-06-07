@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-06-07 — Phase 2 · 后端拆包 `server.py` → `app/`
+
+**Branch:** `refactor/phase-2-app-package` (17 commits, `a9ba3e6..f61c5b2` + recorder strip)
+**实际工时:** 约 4 小时（含调研、replay 工具构建、execute、3 次重录 baseline）
+
+### 落地的事
+- **`server.py` 从 2412 行收缩到 18 行 shim**（-99.3%），只 re-export `app` + `_pb_client` 给 `app.api.today_todos` 的 lazy import 用，systemd `ExecStart=uvicorn server:app` 完全不动
+- **`app/main.py` 新模块**（236 行）— FastAPI app + lifespan + CORS + auth/router 装配 + 4 个 static routes + `/static` & `/uploads` mount + PB token 引导
+- **12 个新子包模块**：
+  - `app/state.py` (51) — AppState dataclass + 模块级 state 单例
+  - `app/persistence/files.py` (93) — 上传常量 + `uploads_dir/_resolve_in_root/_to_rel/classify_upload/_safe_filename`
+  - `app/ws/{broadcast,handler}.py` (23 + 216) — fan-out helper + WebSocket endpoint + handle_ws_message + handle_cmd
+  - `app/auth/{state,middleware,pages}.py` (25 + 84 + 286) — auth_state 单例 + HTTP middleware + 9 个 auth 页面
+  - `app/agent/{content,permission,options,session,turn}.py` (155 + 107 + 113 + 82 + 161) — content builder + can_use_tool + ClaudeAgentOptions builder + 会话生命周期 + 单 turn 执行
+  - `app/reporting/weekly_report.py` (34) — 周报 post-hook
+  - `app/api/{meta,well_known,push,today_todos,browse,sessions,uploads,settings,sync,poi}.py` (10 个 router 共 1130 行)
+- **`tests/replay.py` + `tests/phase2_drive.py`**（Phase 2 专用回归网）— BRIDGE_RECORD=1 门控的 HTTP middleware + WS frame hooks 写 JSONL；确定性 driver 跑 ~100 records；comparator 按字段类型 normalize session_id / cb_id / ISO 时间戳 / token 计数 / cost / URL 路径里的 hex / created_at / updated_at 后字节 diff
+- **`tests/fixtures/phase2_baseline.jsonl`** — 后 Task 14 的稳定 baseline（102 records）；同一代码两次连续 driver run diff = OK
+- **`tests/fixtures/phase2_baseline.pre_phase2.jsonl`** — 归档的原始 baseline（forensic 用，因 recorder 在 500 响应时丢帧，不能直接 byte-diff）
+
+### 闸门
+- ✅ 每个 Task 后 `tests/smoke_backend.py` 0.7s 全绿（health / meta / sessions / today-todos / WS hello）
+- ✅ Task 13/14 重放 diff = OK 102 records（同代码连续两次 run 字节匹配，证明 driver 字节稳定 + 全部路由可重放）
+- ✅ 手测 4 个路由 200：weekly-report / notion-sync / sync/targets / poi/around（poi 非确定性已排除 driver）
+- ✅ 17 次 deploy 全部 health 一次过，无新 ERROR
+- ⏸ 24h staging soak — 待用户在 PWA 上真实跑一次 user_message → tool_use → permission 流程（agent/turn + permission 在 driver 里没覆盖到 LLM 路径）
+
+### 偏离计划
+1. **`tests/phase2_drive.py` 计划没列**：原 plan 假设手动 PWA 操作驱动流量；实测手动不可重复（normalizer 吸收不了输入差异）。新增确定性 driver 是必要工具，跑 ~100 HTTP + ~20 WS frames 覆盖全路由（不触发 LLM）。
+2. **`tests/replay.py` 的 normalizer 比 plan 多 3 条规则**：URL path 里的 hex segment（`/api/sessions/<sid>` 形态）、`created_at`/`updated_at` 浮点。Plan 默认 normalizer 只处理 JSON 字段值名，但 URL 路径在 record 里是值，需要 segment-level 处理。
+3. **原 baseline 不可用，中途改用滚动 baseline**：Task 0 录的 pre-Phase-2 baseline 漏了 4 条 `/api/sync/targets` 500 响应（recorder middleware 对 500 异常路径处理不完整）。Task 12.C 抽 sync router 时换 import 路径意外修了那个 500，diff 直接 count mismatch。解决方案：在 Task 12 末尾重录 baseline 当 Task 13 锚点，每次 Task 后滚动验证。原始 baseline 归档为 `.pre_phase2.jsonl`。
+4. **`/devices` + `/api/browse?path=/` + `/api/poi/around` 从 driver 排除**：分别因 last-seen 时间戳、deploy backup 目录名、外部 API 非确定响应。手测 200 OK 已确认行为。
+5. **server.py 18 行而非 plan 的 16 行**：多了 docstring 一行 + `if __name__ == "__main__"` 的 `log_level="info"` kwarg。可接受。
+6. **跳过 24h soak 直接交付**：与 Phase 0/1 一致；建议你接下来用 PWA 跑一次真实 LLM 对话验证 agent/turn 链路再合并 main。
+
+### 量化
+- `server.py`: 2412 → 18 行 (-2394 行, -99.3%)
+- 新增 `app/main.py`: 236 行
+- 新增 12 子包模块: 共 ~2560 行（含 docstrings）
+- 新增测试工具 `tests/{replay,phase2_drive}.py`: 320 行
+- 净增加 ~700 行，换来：
+  - 每个 router / agent 子系统独立可读、可单测
+  - 8 个明确边界子包替代 1 个 2400 行神文件
+  - 可重放 diff 工具留作 Phase 3+ 的回归网
+
+### 下一步
+👉 Phase 3 · Session 多实例化（拆 `state.client` 全局单例为 per-session client）
+新窗口续接指令："继续重构路线图，从 Phase 3 开始"
+
+---
+
 ## 2026-06-07 — Phase 1 · 统一 PB 客户端 + MCP 工具单源
 
 **Branch:** `refactor/phase-1-pb-client` (10 commits, `ebfc064..4fee31e` + plan `c5f41ac`)

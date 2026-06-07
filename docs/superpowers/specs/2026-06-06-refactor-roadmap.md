@@ -36,7 +36,7 @@
 | -1 护栏 | ✅ 已合并 | `refactor/phase-minus1-guardrails` | 2026-06-06 | `3e60173` | CHANGELOG §Phase -1 |
 | 0 地基 | ✅ 已合并 | `refactor/phase-0-foundation` | 2026-06-06 | `df169fe` | CHANGELOG §Phase 0 |
 | 1 PB 统一 | ✅ 已合并 | `refactor/phase-1-pb-client` | 2026-06-07 | `bda39f4` | CHANGELOG §Phase 1 |
-| 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
+| 2 拆包 | 🚧 已部署 待合并 | `refactor/phase-2-app-package` | 2026-06-07 | `f61c5b2`+清理 | CHANGELOG §Phase 2 |
 | 3 Session 多实例 | ⏳ 待开始 | `refactor/phase-3-session-manager` | — | — | — |
 | 4 前端 | ⏳ 待开始 | `refactor/phase-4-frontend-modules` | — | — | — |
 | 5 sync | ⏳ 待开始 | `refactor/phase-5-sync-runner` | — | — | — |
@@ -46,8 +46,9 @@
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase 2 · 后端拆包 `server.py` → `app/`
+👉 **下一步执行**：Phase 3 · Session 多实例化（拆 `state.client` 全局单例为 per-session client）
 
+Phase 2 已部署、smoke + replay diff 双重验证通过；待 24h soak（或在 PWA 上跑过一次真实 LLM 对话）后合并 main。
 下次开新窗口直接说"继续重构路线图"或贴这一行即可。
 
 ---

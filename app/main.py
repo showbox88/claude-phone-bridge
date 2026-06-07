@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -138,42 +138,6 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
 
 
 app = FastAPI(lifespan=lifespan)
-
-# --- Phase 2 baseline recorder (BRIDGE_RECORD=1) ----------------------------
-# Removed at end of Phase 2 (Task 16 of the phase-2-app-package plan).
-_recorder = None
-if os.environ.get("BRIDGE_RECORD"):
-    import sys as _RS
-    _RS.path.insert(0, str(BRIDGE_ROOT / "tests"))
-    from replay import Recorder as _Recorder  # noqa: E402
-    _recorder = _Recorder(Path(os.environ.get(
-        "BRIDGE_RECORD_PATH",
-        "tests/fixtures/phase2_baseline.jsonl")))
-
-
-@app.middleware("http")
-async def _record_http(request: Request, call_next):
-    if not _recorder:
-        return await call_next(request)
-    req_body = await request.body()
-
-    async def _receive():
-        return {"type": "http.request", "body": req_body, "more_body": False}
-
-    request._receive = _receive
-    response = await call_next(request)
-    chunks = []
-    async for c in response.body_iterator:
-        chunks.append(c)
-    resp_body = b"".join(chunks)
-    _recorder.http(request.method, request.url.path,
-                   str(request.url.query), req_body,
-                   response.status_code, resp_body)
-    from starlette.responses import Response as _SR
-    return _SR(content=resp_body, status_code=response.status_code,
-               headers=dict(response.headers),
-               media_type=response.media_type)
-# --- end Phase 2 baseline recorder ------------------------------------------
 
 # Allow cross-origin requests so a phone-side PWA loaded from any PC can talk
 # to any other PC's bridge over Tailscale. The user's auth/security model is
