@@ -148,23 +148,7 @@ from app.persistence.files import (  # noqa: E402,F401  — re-export keeps exis
 from app.ws.broadcast import broadcast  # noqa: E402
 
 
-async def _weekly_report_posted(sid: str, label: str) -> None:
-    """Hook called by report.scheduler_loop after a new weekly report session
-    is created — tells connected clients to refresh + fires a push so the user
-    sees it on their phone."""
-    await broadcast({"type": "sessions_changed", "reason": "weekly_report",
-                     "session_id": sid})
-    try:
-        await asyncio.to_thread(
-            push.send_to_all,
-            "📊 周报已生成",
-            f"{label} · 打开 Phone Bridge 查看",
-            None,
-        )
-    except Exception:
-        log.exception("weekly report push failed")
-
-
+from app.reporting.weekly_report import _weekly_report_posted  # noqa: E402
 from app.agent.session import init_client, open_session, new_session  # noqa: E402
 from app.agent.content import _build_user_content, _read_text_safe, _read_xlsx_as_text  # noqa: E402,F401
 from app.agent.turn import _block_to_event, _save_msg, run_user_turn  # noqa: E402,F401
