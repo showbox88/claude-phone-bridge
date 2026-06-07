@@ -84,49 +84,23 @@ log = logging.getLogger("mcp_pb")
 
 
 # ---------------------------------------------------------------------------
-# PocketBase HTTP helpers
+# PocketBase HTTP client
 # ---------------------------------------------------------------------------
-def _http(method: str, url: str, body: Any | None = None, headers: dict | None = None,
-          timeout: float = 15.0) -> tuple[int, Any]:
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode("utf-8")
-            return r.status, (json.loads(raw) if raw else None)
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace")
-        try:
-            return e.code, json.loads(raw)
-        except json.JSONDecodeError:
-            return e.code, {"raw": raw[:500]}
+# Phase 1: replaced bespoke _http / _pb_auth / _pb (~40 lines) with the
+# unified app.integrations.pb.PBClient. The client carries its own
+# per-instance token cache + 5xx/429/401 retry logic.
+
+from app.agent.mcp_tools.prompts import TOOL_DESCRIPTIONS  # noqa: E402
+from app.integrations.pb import PBClient  # noqa: E402
+
+_pb_client: PBClient | None = None
 
 
-_pb_token: str | None = None
-_pb_token_expiry: float = 0.0
-
-def _pb_auth() -> str:
-    global _pb_token, _pb_token_expiry
-    if _pb_token and time.time() < _pb_token_expiry:
-        return _pb_token
-    code, data = _http("POST", f"{PB_URL}/api/collections/_superusers/auth-with-password",
-                       body={"identity": PB_EMAIL, "password": PB_PASSWORD},
-                       headers={"Content-Type": "application/json"})
-    if code != 200:
-        raise RuntimeError(f"PB auth failed: {code} {data}")
-    _pb_token = data["token"]
-    _pb_token_expiry = time.time() + 25 * 60
-    return _pb_token
-
-
-def _pb(method: str, path: str, body: Any | None = None) -> Any:
-    code, data = _http(method, f"{PB_URL}{path}", body=body, headers={
-        "Authorization": _pb_auth(),
-        "Content-Type": "application/json",
-    })
-    if code >= 400:
-        raise RuntimeError(f"PB {method} {path}: {code} {data}")
-    return data
+def _pb() -> PBClient:
+    global _pb_client
+    if _pb_client is None:
+        _pb_client = PBClient(PB_URL, PB_EMAIL, PB_PASSWORD)
+    return _pb_client
 
 
 # ---------------------------------------------------------------------------
@@ -341,15 +315,11 @@ mcp.settings.streamable_http_path = "/"
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_list_collections"])
 def pb_list_collections() -> dict:
-    """List all PocketBase collections with their fields and (for select fields)
-    valid values. Call this at the start of a Smart Note conversation so you
-    know the current schema and pick the right collection / select option.
-    """
-    data = _pb("GET", "/api/collections?perPage=100")
+    cols = _pb().list_collections()
     out = []
-    for c in data.get("items", []):
+    for c in cols:
         if c.get("type") != "base":
             continue
         fields = []
@@ -368,7 +338,7 @@ def pb_list_collections() -> dict:
     return {"collections": out}
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_search"])
 def pb_search(
     collection: str,
     filter: str = "",
@@ -377,141 +347,61 @@ def pb_search(
     page: int = 1,
     per_page: int = 30,
 ) -> dict:
-    """Search records in a PocketBase collection.
-
-    Filter uses PB DSL: `(field='value' && other!=0)`. Examples:
-      - status='Active' && priority='High'
-      - title~'idea'           (~ = LIKE)
-      - date >= '2026-01-01'
-
-    Sort: comma list with `-` prefix for desc. e.g. '-date,title'.
-    Expand: comma list of relation field names whose target records you want embedded.
-    """
-    params = []
-    if filter:
-        params.append("filter=" + urllib.parse.quote(filter, safe=""))
-    if sort:
-        params.append("sort=" + urllib.parse.quote(sort, safe=",-"))
-    if expand:
-        params.append("expand=" + urllib.parse.quote(expand, safe=","))
-    params.append(f"page={int(page)}")
-    params.append(f"perPage={min(max(int(per_page), 1), 200)}")
-    return _pb("GET", f"/api/collections/{collection}/records?" + "&".join(params))
+    return _pb().list_page(
+        collection, filter=filter, sort=sort, expand=expand,
+        page=int(page), per_page=min(max(int(per_page), 1), 200),
+    )
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_get"])
 def pb_get(collection: str, id: str, expand: str = "") -> dict:
-    """Get a single record by ID, optionally with `expand` for relations."""
-    q = "?expand=" + urllib.parse.quote(expand, safe=",") if expand else ""
-    return _pb("GET", f"/api/collections/{collection}/records/{id}{q}")
+    return _pb().get_record(collection, id, expand=expand)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_create"])
 def pb_create(collection: str, data: dict) -> dict:
-    """Create a record in `collection`. `data` is a field map.
-
-    PB auto-fills id, created, updated. For select fields use the exact string
-    value (case-sensitive). For relation fields use the target record's id
-    (single) or list of ids (multi).
-    """
-    return _pb("POST", f"/api/collections/{collection}/records", body=data)
+    return _pb().create_record(collection, data)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_update"])
 def pb_update(collection: str, id: str, data: dict) -> dict:
-    """Update specific fields of a record. Pass only fields to change.
-
-    Common patterns:
-      - Archive: pb_update(coll, id, {"status": "Archived"})
-      - Mark todo done: pb_update("todos", id, {"status": "Done", "completed_at": "2026-05-27"})
-    """
-    return _pb("PATCH", f"/api/collections/{collection}/records/{id}", body=data)
+    return _pb().update_record(collection, id, data)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_delete"])
 def pb_delete(collection: str, id: str) -> dict:
-    """Permanently delete a record. Irreversible. Per Smart Note rules,
-    prefer `pb_update(coll, id, {"status": "Archived"})` for normal mistakes.
-    Use real delete only when the user explicitly asks ("hard delete",
-    "really remove", "彻底删掉"), or for obvious garbage like duplicate
-    rows / test scaffolding / records the user never saw.
-
-    Returns {"ok": true, "deleted": id} on success.
-    """
-    _pb("DELETE", f"/api/collections/{collection}/records/{id}")
+    _pb().delete_record(collection, id)
     return {"ok": True, "collection": collection, "deleted": id}
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_create_collection"])
 def pb_create_collection(name: str, fields: list, type: str = "base") -> dict:
-    """Create a new PocketBase collection (table).
-
-    `fields` is a list of field-spec dicts. Each spec needs at minimum
-    `name` and `type`. Common types and their extra keys:
-      - text:     {"name":"title","type":"text","required":true,"max":200}
-      - editor:   {"name":"content","type":"editor"}                       (markdown)
-      - number:   {"name":"qty","type":"number","required":false}
-      - bool:     {"name":"done","type":"bool"}
-      - date:     {"name":"due_date","type":"date"}
-      - email/url:{"name":"email","type":"email"}
-      - select:   {"name":"status","type":"select","maxSelect":1,
-                   "values":["Active","Archived"]}
-      - relation: {"name":"plan","type":"relation","collectionId":"<id>",
-                   "maxSelect":1,"cascadeDelete":false}
-      - json:     {"name":"raw","type":"json"}
-      - file:     {"name":"attach","type":"file","maxSelect":3}
-
-    Note: PocketBase auto-adds `id`, `created`, `updated` system fields.
-    Returns the created collection record (with its new id).
-    Use `pb_list_collections()` afterwards if you need to confirm.
-    """
-    body = {"name": name, "type": type, "fields": fields}
-    return _pb("POST", "/api/collections", body=body)
+    return _pb().create_collection({"name": name, "type": type, "fields": fields})
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_update_collection"])
 def pb_update_collection(id_or_name: str, patch: dict) -> dict:
-    """Patch an existing collection (rename, add/remove/modify fields, add
-    indexes, change listRule/viewRule/etc). `patch` is merged onto current
-    collection definition.
-
-    To add a field: include the FULL fields array (existing + new) in patch.
-    Existing fields keep their data; new fields default to null for old rows.
-    To change a select field's allowed values: replace its `values` array.
-
-    Example - add new field to an existing collection:
-      cur = pb_get_collection("ideas")
-      new_fields = cur["fields"] + [{"name":"priority","type":"select",
-                                     "values":["Low","High"],"maxSelect":1}]
-      pb_update_collection("ideas", {"fields": new_fields})
-    """
-    return _pb("PATCH", f"/api/collections/{id_or_name}", body=patch)
+    return _pb().update_collection(id_or_name, patch)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_delete_collection"])
 def pb_delete_collection(id_or_name: str) -> dict:
-    """Delete a collection AND all its records. Irreversible. Use only when
-    explicitly asked by the user. Returns {"ok": true} on success."""
-    _pb("DELETE", f"/api/collections/{id_or_name}")
+    _pb().delete_collection(id_or_name)
     return {"ok": True, "deleted": id_or_name}
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["pb_get_collection"])
 def pb_get_collection(id_or_name: str) -> dict:
-    """Fetch the full definition of one collection (all fields with their
-    raw config). Use before `pb_update_collection` to read the current
-    field array, then mutate and patch it back."""
-    return _pb("GET", f"/api/collections/{id_or_name}")
+    return _pb().get_collection(id_or_name)
 
 
-@mcp.tool()
+@mcp.tool(description=TOOL_DESCRIPTIONS["smartnote_open_context"])
 def smartnote_open_context() -> dict:
-    """Fetch active high-priority memos from `claude_memos`. Call at the start
-    of a Smart Note conversation to recover persistent context.
-    """
-    f = urllib.parse.quote("status='Active' && priority='High'", safe="")
-    return _pb("GET",
-        f"/api/collections/claude_memos/records?filter={f}&sort=-date&perPage=50")
+    return _pb().list_page(
+        "claude_memos",
+        filter="status='Active' && priority='High'",
+        sort="-date", per_page=50,
+    )
 
 
 # ---------------------------------------------------------------------------
