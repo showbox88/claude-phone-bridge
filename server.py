@@ -179,25 +179,7 @@ async def _weekly_report_posted(sid: str, label: str) -> None:
         log.exception("weekly report push failed")
 
 
-# ---------- claude session lifecycle ----------
-
-async def init_client(resume_sdk_id: str | None = None) -> None:
-    if state.client is not None:
-        with contextlib.suppress(Exception):
-            await state.client.disconnect()
-        state.client = None
-
-    log.info(
-        "starting Claude session cwd=%s resume=%s mode=%s model=%s",
-        state.cwd, resume_sdk_id, state.mode, state.model or "default",
-    )
-    state.client = ClaudeSDKClient(options=make_options(resume_sdk_id))
-    await state.client.connect()
-    state.sdk_session_id = resume_sdk_id  # may be overwritten by next ResultMessage
-    await broadcast({
-        "type": "system",
-        "msg": f"session ready · {state.mode} · {state.model or 'default'} · cwd={_to_rel(state.cwd) or '/'}",
-    })
+from app.agent.session import init_client, open_session, new_session  # noqa: E402
 
 
 def _block_to_event(block) -> dict | None:
@@ -321,46 +303,6 @@ async def run_user_turn(
         except Exception as e:
             log.exception("turn failed")
             await broadcast({"type": "error", "msg": f"{type(e).__name__}: {e}"})
-
-
-# ---------- bridge session helpers ----------
-
-async def open_session(sid: str) -> None:
-    """Switch active session and (re)connect the SDK client, resuming if possible."""
-    sess = db.get_session(sid)
-    if sess is None:
-        await broadcast({"type": "error", "msg": f"session not found: {sid}"})
-        return
-    state.session_id = sid
-    state.cwd = (state.cwd_root / sess["cwd"]).resolve() if sess["cwd"] else state.cwd_root
-    if not str(state.cwd).startswith(str(state.cwd_root)):
-        state.cwd = state.cwd_root
-    state.mode = sess.get("mode") or "code"
-    state.model = sess.get("model") or ""
-    await init_client(resume_sdk_id=sess.get("sdk_session_id"))
-    await broadcast({
-        "type": "session_loaded",
-        "session": {
-            "id": sess["id"],
-            "title": sess["title"],
-            "cwd": _to_rel(state.cwd),
-            "mode": state.mode,
-            "model": state.model,
-            "messages": sess["messages"],
-        },
-    })
-
-
-async def new_session(cwd_rel: str | None = None, mode: str = "code", model: str = "") -> str:
-    target_cwd = state.cwd_root
-    if cwd_rel:
-        resolved = _resolve_in_root(cwd_rel)
-        if resolved and resolved.is_dir():
-            target_cwd = resolved
-    rel_cwd = _to_rel(target_cwd)
-    sid = db.create_session(cwd=rel_cwd, title="", mode=mode, model=model)
-    await open_session(sid)
-    return sid
 
 
 # ---------- FastAPI ----------
