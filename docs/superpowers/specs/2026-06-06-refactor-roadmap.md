@@ -35,7 +35,7 @@
 |---|---|---|---|---|---|
 | -1 护栏 | ✅ 已合并 | `refactor/phase-minus1-guardrails` | 2026-06-06 | `3e60173` | CHANGELOG §Phase -1 |
 | 0 地基 | ✅ 已合并 | `refactor/phase-0-foundation` | 2026-06-06 | `df169fe` | CHANGELOG §Phase 0 |
-| 1 PB 统一 | 🚧 已部署 待合并 | `refactor/phase-1-pb-client` | 2026-06-07 | `4fee31e`（tip） | CHANGELOG §Phase 1 |
+| 1 PB 统一 | ✅ 已合并 | `refactor/phase-1-pb-client` | 2026-06-07 | `bda39f4` | CHANGELOG §Phase 1 |
 | 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
 | 3 Session 多实例 | ⏳ 待开始 | `refactor/phase-3-session-manager` | — | — | — |
 | 4 前端 | ⏳ 待开始 | `refactor/phase-4-frontend-modules` | — | — | — |
