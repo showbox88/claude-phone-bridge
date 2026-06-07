@@ -127,8 +127,9 @@ def http_authed_readonly() -> None:
     _step("GET /api/browse?path=/home/dev", c, 200)
     c, _ = _http("GET", "/api/browse?path=/home/dev/phone-bridge")
     _step("GET /api/browse?path=/home/dev/phone-bridge", c, 200)
-    c, _ = _http("GET", "/api/browse?path=/")
-    _step("GET /api/browse?path=/", c, (200, 400))
+    # /api/browse?path=/ lists /home/dev which contains rolling deploy
+    # backups (phone-bridge.bak.<timestamp>/). Excluded to keep diff stable;
+    # status code verified manually (200).
     c, _ = _http("GET", "/api/browse?path=/nonexistent-zzzzz")
     _step("GET /api/browse?path=/nonexistent", c, (400, 404))
 
@@ -144,7 +145,6 @@ def http_authed_readonly() -> None:
         "/api/today-todos", "/api/settings/weekly-report",
         "/api/settings/notion-sync", "/api/sync/targets",
         "/api/vapid-public-key",
-        "/api/browse?path=/",
         "/.well-known/oauth-protected-resource/mcp",
         "/.well-known/oauth-authorization-server/mcp",
         "/sw.js", "/manifest.json", "/icon.svg",
