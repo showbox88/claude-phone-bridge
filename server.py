@@ -756,12 +756,7 @@ app.add_middleware(
 # cookie. WebSocket auth is enforced inside the /ws handler.
 # ============================================================================
 
-_AUTH_FILE = Path(settings.bridge_auth_file) if settings.bridge_auth_file else (
-    Path(__file__).resolve().parent / ".bridge_auth.json"
-)
-_COOKIE_DAYS = settings.bridge_cookie_days
-_COOKIE_SECONDS = _COOKIE_DAYS * 86400
-auth_state = auth_mod.AuthState(_AUTH_FILE)
+from app.auth.state import _COOKIE_SECONDS, auth_state  # noqa: E402
 
 _PUBLIC_PREFIXES = ("/login", "/logout", "/setup", "/static/")
 _PUBLIC_EXACT = {
