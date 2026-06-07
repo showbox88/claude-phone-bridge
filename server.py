@@ -58,6 +58,11 @@ from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.provisioner import provision_notion_db
 
+from app.integrations.pb import (
+    PBClient,
+    PBError,
+    refresh_token_into_env,
+)
 from app.paths import AUTH_FILE, BRIDGE_ROOT
 from app.settings import settings
 
@@ -78,32 +83,42 @@ POCKETBASE_URL = settings.pocketbase_url
 POCKETBASE_ADMIN_EMAIL = settings.pocketbase_admin_email
 POCKETBASE_ADMIN_PASSWORD = settings.pocketbase_admin_password
 
+# Unified PB client. Shared by:
+#  - _pb_refresh_token (12h loop + lifespan startup) via refresh_token_into_env
+#  - _pb_get_json (today-todos endpoint)
+# The sync_config / sync_global REST handlers further down still use
+# notion_sync.pb_api.PBClient (a shim around the same unified class) —
+# separate instance, same superuser creds, independent PB admin tokens.
+_pb_instance: PBClient | None = None
+
+
+def _pb_client() -> PBClient:
+    global _pb_instance
+    if _pb_instance is None:
+        _pb_instance = PBClient(
+            POCKETBASE_URL,
+            POCKETBASE_ADMIN_EMAIL,
+            POCKETBASE_ADMIN_PASSWORD,
+        )
+    return _pb_instance
+
 
 def _pb_refresh_token() -> bool:
-    """Auth against PocketBase and set PB_TOKEN/PB_URL env vars for child Bash."""
+    """Auth against PocketBase and mirror PB_TOKEN/PB_URL into os.environ.
+
+    The os.environ mirror is the side-channel for child Bash subprocesses
+    spawned by the Claude SDK — the CHAT-mode CHECKIN flow uses
+    `$PB_TOKEN` and `$PB_URL` directly in curl commands. See
+    refresh_token_into_env() in app/integrations/pb/token.py.
+
+    Returns True on success, False if creds missing or auth failed.
+    """
     if not (POCKETBASE_URL and POCKETBASE_ADMIN_EMAIL and POCKETBASE_ADMIN_PASSWORD):
         return False
     try:
-        req = urllib.request.Request(
-            POCKETBASE_URL + "/api/collections/_superusers/auth-with-password",
-            data=json.dumps({
-                "identity": POCKETBASE_ADMIN_EMAIL,
-                "password": POCKETBASE_ADMIN_PASSWORD,
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read())
-            # NOTE: writes to os.environ — child Bash subprocesses
-            # spawned by Claude SDK inherit and pick up the refreshed
-            # token. Phase 1 (PB client unification) moves token
-            # management into app/integrations/pb/client.py.
-            os.environ["PB_TOKEN"] = data["token"]
-            os.environ["PB_URL"] = POCKETBASE_URL
-            log.info("PB token refreshed (len=%d)", len(data["token"]))
-            return True
-    except (urllib.error.URLError, KeyError, ValueError, OSError) as e:
+        refresh_token_into_env(_pb_client())
+        return True
+    except PBError as e:
         log.error("PB token refresh failed: %s", e)
         return False
 
@@ -1179,33 +1194,21 @@ class _PBError(Exception):
 
 
 def _pb_get_json(path: str) -> dict:
-    """GET a PocketBase admin endpoint with auto-retry on 401. Raises
-    _PBError on persistent failure."""
+    """GET a PocketBase endpoint. Raises _PBError on persistent failure.
+
+    Phase 1 delegates to the unified PBClient, which handles 401 →
+    forced re-auth → one retry internally, plus 5xx/429 backoff. We
+    catch PBError and re-raise as _PBError to keep this function's
+    one caller (_today_todos_query) unchanged.
+    """
     if not POCKETBASE_URL:
         raise _PBError("PocketBase not configured")
-    # PB_TOKEN comes from os.environ (side-channel set by _pb_refresh_token);
-    # cannot use app.settings.pb_token because that's frozen at import time.
-    # Phase 1 (PB client unification) moves token management out of os.environ.
-    token = os.environ.get("PB_TOKEN", "")
-    url = POCKETBASE_URL + path
-    last_err: Exception | None = None
-    for attempt in (0, 1):
-        req = urllib.request.Request(url,
-            headers={"Authorization": token} if token else {})
-        try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return json.loads(r.read())
-        except urllib.error.HTTPError as e:
-            last_err = e
-            if e.code == 401 and attempt == 0 and _pb_refresh_token():
-                token = os.environ.get("PB_TOKEN", "")
-                continue
-            break
-        except (urllib.error.URLError, OSError) as e:
-            last_err = e
-            break
-    log.warning("PB GET %s failed: %s", path, last_err)
-    raise _PBError(str(last_err))
+    try:
+        return _pb_client().request("GET", path, retry_on_401=True,
+                                    timeout=10.0)
+    except PBError as e:
+        log.warning("PB GET %s failed: %s", path, e)
+        raise _PBError(str(e)) from e
 
 
 def _today_todos_query() -> list[dict]:
