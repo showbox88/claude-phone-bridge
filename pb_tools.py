@@ -24,8 +24,6 @@ import json
 import logging
 import sys
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -120,55 +118,27 @@ def enabled() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# PocketBase HTTP helpers (blocking urllib; tools wrap these in to_thread so
-# the FastAPI event loop never blocks on PB I/O).
+# PocketBase HTTP client
 # ---------------------------------------------------------------------------
-def _http(method: str, url: str, body: Any | None = None, headers: dict | None = None,
-          timeout: float = 15.0) -> tuple[int, Any]:
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode("utf-8")
-            return r.status, (json.loads(raw) if raw else None)
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", "replace")
-        try:
-            return e.code, json.loads(raw)
-        except json.JSONDecodeError:
-            return e.code, {"raw": raw[:500]}
+# Phase 1: replaced bespoke _http / _pb_auth / _pb_sync / _pb (~50 lines)
+# with the unified app.integrations.pb.AsyncPBClient. The client carries
+# its own per-instance token cache + 5xx/429/401 retry logic.
+#
+# Separate process from server.py's _pb_client; that's fine — both
+# instances authenticate independently against the same PB superuser
+# credentials. PB issues independent admin tokens; no contention.
+
+from app.agent.mcp_tools.prompts import TOOL_DESCRIPTIONS, TOOL_SCHEMAS
+from app.integrations.pb import AsyncPBClient, PBError
+
+_pb_client: AsyncPBClient | None = None
 
 
-_pb_token: str | None = None
-_pb_token_expiry: float = 0.0
-
-
-def _pb_auth() -> str:
-    global _pb_token, _pb_token_expiry
-    if _pb_token and time.time() < _pb_token_expiry:
-        return _pb_token
-    code, data = _http("POST", f"{PB_URL}/api/collections/_superusers/auth-with-password",
-                       body={"identity": PB_EMAIL, "password": PB_PASSWORD},
-                       headers={"Content-Type": "application/json"})
-    if code != 200:
-        raise RuntimeError(f"PB auth failed: {code} {data}")
-    _pb_token = data["token"]
-    _pb_token_expiry = time.time() + 25 * 60
-    return _pb_token
-
-
-def _pb_sync(method: str, path: str, body: Any | None = None) -> Any:
-    code, data = _http(method, f"{PB_URL}{path}", body=body, headers={
-        "Authorization": _pb_auth(),
-        "Content-Type": "application/json",
-    })
-    if code >= 400:
-        raise RuntimeError(f"PB {method} {path}: {code} {data}")
-    return data
-
-
-async def _pb(method: str, path: str, body: Any | None = None) -> Any:
-    return await asyncio.to_thread(_pb_sync, method, path, body)
+def _pb() -> AsyncPBClient:
+    global _pb_client
+    if _pb_client is None:
+        _pb_client = AsyncPBClient(PB_URL, PB_EMAIL, PB_PASSWORD)
+    return _pb_client
 
 
 def _ok(data: Any) -> dict:
@@ -185,16 +155,14 @@ def _err(msg: str) -> dict:
 # ---------------------------------------------------------------------------
 @tool(
     "pb_list_collections",
-    "List all PocketBase collections with their fields and (for select fields) "
-    "valid values. Call this at the start of a Smart Note conversation so you "
-    "know the current schema and pick the right collection / select option.",
-    {},
+    TOOL_DESCRIPTIONS["pb_list_collections"],
+    TOOL_SCHEMAS["pb_list_collections"],
 )
 async def pb_list_collections(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
     try:
-        data = await _pb("GET", "/api/collections?perPage=100")
+        cols = await _pb().list_collections()
         out = []
-        for c in data.get("items", []):
+        for c in cols:
             if c.get("type") != "base":
                 continue
             fields = []
@@ -211,260 +179,157 @@ async def pb_list_collections(args: dict[str, Any]) -> dict[str, Any]:  # noqa: 
                 fields.append(fdesc)
             out.append({"name": c["name"], "id": c["id"], "fields": fields})
         return _ok({"collections": out})
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_list_collections failed: {e}")
 
 
 @tool(
     "pb_search",
-    "Search records in a PocketBase collection.\n\n"
-    "Filter uses PB DSL: (field='value' && other!=0). Examples:\n"
-    "  - status='Active' && priority='High'\n"
-    "  - title~'idea'           (~ = LIKE)\n"
-    "  - date >= '2026-01-01'\n"
-    "Sort: comma list with '-' prefix for desc, e.g. '-date,title'.\n"
-    "Expand: comma list of relation field names whose target records to embed.",
-    {
-        "type": "object",
-        "properties": {
-            "collection": {"type": "string", "description": "Collection name"},
-            "filter":     {"type": "string", "description": "PB filter DSL (optional)"},
-            "sort":       {"type": "string", "description": "Sort spec, default '-created'"},
-            "expand":     {"type": "string", "description": "Relation fields to embed (optional)"},
-            "page":       {"type": "integer", "description": "1-based page, default 1"},
-            "per_page":   {"type": "integer", "description": "Page size 1-200, default 30"},
-        },
-        "required": ["collection"],
-    },
+    TOOL_DESCRIPTIONS["pb_search"],
+    TOOL_SCHEMAS["pb_search"],
 )
 async def pb_search(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        collection = args["collection"]
-        filter_    = args.get("filter", "")
-        sort       = args.get("sort", "-created")
-        expand     = args.get("expand", "")
-        page       = int(args.get("page", 1))
-        per_page   = int(args.get("per_page", 30))
-        params = []
-        if filter_:
-            params.append("filter=" + urllib.parse.quote(filter_, safe=""))
-        if sort:
-            params.append("sort=" + urllib.parse.quote(sort, safe=",-"))
-        if expand:
-            params.append("expand=" + urllib.parse.quote(expand, safe=","))
-        params.append(f"page={page}")
-        params.append(f"perPage={min(max(per_page, 1), 200)}")
-        data = await _pb("GET", f"/api/collections/{collection}/records?" + "&".join(params))
+        data = await _pb().list_page(
+            args["collection"],
+            filter=args.get("filter", ""),
+            sort=args.get("sort", "-created"),
+            expand=args.get("expand", ""),
+            page=int(args.get("page", 1)),
+            per_page=min(max(int(args.get("per_page", 30)), 1), 200),
+        )
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_search failed: {e}")
 
 
 @tool(
     "pb_get",
-    "Get a single PocketBase record by ID, optionally with 'expand' for relations.",
-    {
-        "type": "object",
-        "properties": {
-            "collection": {"type": "string"},
-            "id":         {"type": "string"},
-            "expand":     {"type": "string", "description": "Relation fields to embed (optional)"},
-        },
-        "required": ["collection", "id"],
-    },
+    TOOL_DESCRIPTIONS["pb_get"],
+    TOOL_SCHEMAS["pb_get"],
 )
 async def pb_get(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        expand = args.get("expand", "")
-        q = "?expand=" + urllib.parse.quote(expand, safe=",") if expand else ""
-        data = await _pb("GET", f"/api/collections/{args['collection']}/records/{args['id']}{q}")
+        data = await _pb().get_record(
+            args["collection"], args["id"], expand=args.get("expand", ""),
+        )
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_get failed: {e}")
 
 
 @tool(
     "pb_create",
-    "Create a record in a PocketBase collection. 'data' is a field map.\n\n"
-    "PB auto-fills id, created, updated. For select fields use the exact string "
-    "value (case-sensitive). For relation fields use the target record's id "
-    "(single) or list of ids (multi).",
-    {
-        "type": "object",
-        "properties": {
-            "collection": {"type": "string"},
-            "data":       {"type": "object", "description": "Field map for the new record"},
-        },
-        "required": ["collection", "data"],
-    },
+    TOOL_DESCRIPTIONS["pb_create"],
+    TOOL_SCHEMAS["pb_create"],
 )
 async def pb_create(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        data = await _pb("POST", f"/api/collections/{args['collection']}/records",
-                         body=args["data"])
+        data = await _pb().create_record(args["collection"], args["data"])
         _schedule_auto_sync(args["collection"])
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_create failed: {e}")
 
 
 @tool(
     "pb_update",
-    "Update specific fields of a PocketBase record. Pass only fields to change.\n\n"
-    "Common patterns:\n"
-    "  - Archive: pb_update(coll, id, {\"status\": \"Archived\"})\n"
-    "  - Mark todo done: pb_update(\"todos\", id, {\"status\": \"Done\", "
-    "\"completed_at\": \"2026-05-27\"})",
-    {
-        "type": "object",
-        "properties": {
-            "collection": {"type": "string"},
-            "id":         {"type": "string"},
-            "data":       {"type": "object", "description": "Fields to change"},
-        },
-        "required": ["collection", "id", "data"],
-    },
+    TOOL_DESCRIPTIONS["pb_update"],
+    TOOL_SCHEMAS["pb_update"],
 )
 async def pb_update(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        data = await _pb("PATCH",
-                         f"/api/collections/{args['collection']}/records/{args['id']}",
-                         body=args["data"])
+        data = await _pb().update_record(
+            args["collection"], args["id"], args["data"],
+        )
         _schedule_auto_sync(args["collection"])
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_update failed: {e}")
 
 
 @tool(
     "pb_delete",
-    "Permanently delete a PocketBase record. Irreversible. Per Smart Note rules, "
-    "prefer pb_update(coll, id, {\"status\": \"Archived\"}) for normal mistakes. "
-    "Use real delete only when the user explicitly asks (\"hard delete\", "
-    "\"really remove\", \"彻底删掉\"), or for obvious garbage like duplicate rows / "
-    "test scaffolding / records the user never saw.",
-    {
-        "type": "object",
-        "properties": {
-            "collection": {"type": "string"},
-            "id":         {"type": "string"},
-        },
-        "required": ["collection", "id"],
-    },
+    TOOL_DESCRIPTIONS["pb_delete"],
+    TOOL_SCHEMAS["pb_delete"],
 )
 async def pb_delete(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        await _pb("DELETE", f"/api/collections/{args['collection']}/records/{args['id']}")
+        await _pb().delete_record(args["collection"], args["id"])
         _schedule_auto_sync(args["collection"])
         return _ok({"ok": True, "collection": args["collection"], "deleted": args["id"]})
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_delete failed: {e}")
 
 
 @tool(
     "pb_get_collection",
-    "Fetch the full definition of one collection (all fields with their raw "
-    "config). Use before pb_update_collection to read the current field array, "
-    "then mutate and patch it back.",
-    {
-        "type": "object",
-        "properties": {"id_or_name": {"type": "string"}},
-        "required": ["id_or_name"],
-    },
+    TOOL_DESCRIPTIONS["pb_get_collection"],
+    TOOL_SCHEMAS["pb_get_collection"],
 )
 async def pb_get_collection(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        data = await _pb("GET", f"/api/collections/{args['id_or_name']}")
+        data = await _pb().get_collection(args["id_or_name"])
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_get_collection failed: {e}")
 
 
 @tool(
     "pb_create_collection",
-    "Create a new PocketBase collection (table). 'fields' is a list of field-spec "
-    "dicts; each needs at minimum 'name' and 'type'. Common types: text, editor "
-    "(markdown), number, bool, date, email, url, select "
-    "({\"type\":\"select\",\"maxSelect\":1,\"values\":[...]}), relation "
-    "({\"type\":\"relation\",\"collectionId\":\"<id>\",\"maxSelect\":1}), json, "
-    "file. PB auto-adds id/created/updated. Returns the created collection.",
-    {
-        "type": "object",
-        "properties": {
-            "name":   {"type": "string"},
-            "fields": {"type": "array", "items": {"type": "object"},
-                       "description": "List of field-spec dicts"},
-            "type":   {"type": "string", "description": "Collection type, default 'base'"},
-        },
-        "required": ["name", "fields"],
-    },
+    TOOL_DESCRIPTIONS["pb_create_collection"],
+    TOOL_SCHEMAS["pb_create_collection"],
 )
 async def pb_create_collection(args: dict[str, Any]) -> dict[str, Any]:
     try:
         body = {"name": args["name"], "type": args.get("type", "base"),
                 "fields": args["fields"]}
-        data = await _pb("POST", "/api/collections", body=body)
+        data = await _pb().create_collection(body)
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_create_collection failed: {e}")
 
 
 @tool(
     "pb_update_collection",
-    "Patch an existing collection (rename, add/remove/modify fields, indexes, "
-    "rules). 'patch' is merged onto the current definition. To add a field, "
-    "include the FULL fields array (existing + new) — read it first with "
-    "pb_get_collection. Existing fields keep their data; new fields default to "
-    "null for old rows.",
-    {
-        "type": "object",
-        "properties": {
-            "id_or_name": {"type": "string"},
-            "patch":      {"type": "object", "description": "Fields to merge onto the collection"},
-        },
-        "required": ["id_or_name", "patch"],
-    },
+    TOOL_DESCRIPTIONS["pb_update_collection"],
+    TOOL_SCHEMAS["pb_update_collection"],
 )
 async def pb_update_collection(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        data = await _pb("PATCH", f"/api/collections/{args['id_or_name']}",
-                         body=args["patch"])
+        data = await _pb().update_collection(args["id_or_name"], args["patch"])
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_update_collection failed: {e}")
 
 
 @tool(
     "pb_delete_collection",
-    "Delete a collection AND all its records. Irreversible. Use only when "
-    "explicitly asked by the user.",
-    {
-        "type": "object",
-        "properties": {"id_or_name": {"type": "string"}},
-        "required": ["id_or_name"],
-    },
+    TOOL_DESCRIPTIONS["pb_delete_collection"],
+    TOOL_SCHEMAS["pb_delete_collection"],
 )
 async def pb_delete_collection(args: dict[str, Any]) -> dict[str, Any]:
     try:
-        await _pb("DELETE", f"/api/collections/{args['id_or_name']}")
+        await _pb().delete_collection(args["id_or_name"])
         return _ok({"ok": True, "deleted": args["id_or_name"]})
-    except Exception as e:
+    except PBError as e:
         return _err(f"pb_delete_collection failed: {e}")
 
 
 @tool(
     "smartnote_open_context",
-    "Fetch active high-priority memos from claude_memos. Call at the start of a "
-    "Smart Note conversation to recover persistent context.",
-    {},
+    TOOL_DESCRIPTIONS["smartnote_open_context"],
+    TOOL_SCHEMAS["smartnote_open_context"],
 )
 async def smartnote_open_context(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
     try:
-        f = urllib.parse.quote("status='Active' && priority='High'", safe="")
-        data = await _pb("GET",
-            f"/api/collections/claude_memos/records?filter={f}&sort=-date&perPage=50")
+        data = await _pb().list_page(
+            "claude_memos",
+            filter="status='Active' && priority='High'",
+            sort="-date", per_page=50,
+        )
         return _ok(data)
-    except Exception as e:
+    except PBError as e:
         return _err(f"smartnote_open_context failed: {e}")
 
 
@@ -585,15 +450,14 @@ async def sync_queue_status(args: dict[str, Any]) -> dict[str, Any]:  # noqa: AR
 )
 async def sync_pause(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
     try:
-        data = await _pb("GET", "/api/collections/sync_global/records?perPage=1")
-        items = data.get("items", [])
+        envelope = await _pb().list_page("sync_global", per_page=1)
+        items = envelope.get("items", [])
         if not items:
             return _err("sync_global has no rows")
         row = items[0]
-        await _pb("PATCH", f"/api/collections/sync_global/records/{row['id']}",
-                  body={"paused": True})
+        await _pb().update_record("sync_global", row["id"], {"paused": True})
         return _ok({"ok": True, "paused": True})
-    except Exception as e:
+    except PBError as e:
         return _err(f"sync_pause failed: {e}")
 
 
@@ -605,15 +469,14 @@ async def sync_pause(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
 )
 async def sync_resume(args: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
     try:
-        data = await _pb("GET", "/api/collections/sync_global/records?perPage=1")
-        items = data.get("items", [])
+        envelope = await _pb().list_page("sync_global", per_page=1)
+        items = envelope.get("items", [])
         if not items:
             return _err("sync_global has no rows")
         row = items[0]
-        await _pb("PATCH", f"/api/collections/sync_global/records/{row['id']}",
-                  body={"paused": False})
+        await _pb().update_record("sync_global", row["id"], {"paused": False})
         return _ok({"ok": True, "paused": False})
-    except Exception as e:
+    except PBError as e:
         return _err(f"sync_resume failed: {e}")
 
 
