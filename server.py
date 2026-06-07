@@ -268,178 +268,16 @@ from app.auth.pages import pages_router  # noqa: E402
 app.middleware("http")(auth_middleware)
 app.include_router(pages_router)
 
+# API routers (Task 12).
+from app.api.meta import router as _meta_router  # noqa: E402
+from app.api.well_known import router as _well_known_router  # noqa: E402
+from app.api.push import router as _push_router  # noqa: E402
+from app.api.today_todos import router as _today_todos_router  # noqa: E402
 
-@app.get("/api/health")
-async def api_health(request: Request):
-    """Lightweight probe. Returns minimal info to anonymous clients (so the
-    dashboard's HTTP probe still works without auth) and full session info
-    only to authenticated devices."""
-    base = {"ok": True}
-    if auth_state.is_initialized() and _current_device(request) is None:
-        return base
-    base.update({
-        "name": settings.bridge_name or socket.gethostname(),
-        "cwd_root": str(state.cwd_root).replace("\\", "/"),
-        "session_id": state.session_id,
-        "mode": state.mode,
-        "model": state.model or "",
-    })
-    return base
-
-
-# ---------- REST: today's todos (drives the header bell) ----------
-
-def _today_ack_path() -> Path:
-    """Co-located with the server script so the path is stable regardless of
-    DEFAULT_CWD or the user navigating to a different cwd at runtime."""
-    return Path(__file__).parent / ".bridge_data" / "today_ack.json"
-
-
-class _PBError(Exception):
-    """PocketBase query failed (network, auth, or HTTP error). Raised by
-    `_pb_get_json` so callers can distinguish 'no data today' from 'we
-    couldn't reach PB at all' instead of silently returning an empty list."""
-
-
-def _pb_get_json(path: str) -> dict:
-    """GET a PocketBase endpoint. Raises _PBError on persistent failure.
-
-    Phase 1 delegates to the unified PBClient, which handles 401 →
-    forced re-auth → one retry internally, plus 5xx/429 backoff. We
-    catch PBError and re-raise as _PBError to keep this function's
-    one caller (_today_todos_query) unchanged.
-    """
-    if not POCKETBASE_URL:
-        raise _PBError("PocketBase not configured")
-    try:
-        return _pb_client().request("GET", path, retry_on_401=True,
-                                    timeout=10.0)
-    except PBError as e:
-        log.warning("PB GET %s failed: %s", path, e)
-        raise _PBError(str(e)) from e
-
-
-def _today_todos_query() -> list[dict]:
-    today = _dt.date.today().isoformat()
-    f = (f"status='Pending' && "
-         f"(due_date='' || due_date<='{today} 23:59:59')")
-    q = urllib.parse.quote(f, safe="")
-    data = _pb_get_json(
-        f"/api/collections/todos/records?filter={q}"
-        f"&sort=due_date,-priority&perPage=200")
-    out = []
-    for r in data.get("items", []):
-        out.append({
-            "id": r.get("id", ""),
-            "title": r.get("title", ""),
-            "due_date": r.get("due_date", "") or "",
-            "priority": r.get("priority", "") or "Normal",
-        })
-    return out
-
-
-def _today_signature(items: list[dict]) -> str:
-    today = _dt.date.today().isoformat()
-    ids = ",".join(sorted(x["id"] for x in items))
-    return _hashlib.sha1(f"{today}|{ids}".encode()).hexdigest()[:16]
-
-
-def _load_today_ack() -> dict:
-    from app.io_utils import read_json_safe
-    return read_json_safe(_today_ack_path(), default={})
-
-
-def _save_today_ack(d: dict) -> None:
-    from app.io_utils import write_json_atomic
-    write_json_atomic(_today_ack_path(), d, indent=None)
-
-
-@app.get("/api/today-todos")
-async def api_today_todos():
-    """Return today's pending todos for the header bell. Auth is enforced by
-    the global middleware (path is not in `_PUBLIC_EXACT`).
-
-    On PB unreachable: returns {"ok": false, "error": "pb_unreachable"} so the
-    client can keep its last-known bell state instead of treating the outage
-    as 'no todos today'."""
-    try:
-        items = await asyncio.to_thread(_today_todos_query)
-    except _PBError as e:
-        return {"ok": False, "error": "pb_unreachable", "detail": str(e)}
-    sig = _today_signature(items)
-    ack = await asyncio.to_thread(_load_today_ack)
-    return {
-        "ok": True,
-        "count": len(items),
-        "items": items,
-        "signature": sig,
-        "acked": ack.get("signature") == sig and len(items) > 0,
-    }
-
-
-@app.post("/api/today-todos/ack")
-async def api_today_todos_ack(body: dict):
-    sig = (body or {}).get("signature", "")
-    if not sig:
-        raise HTTPException(400, "missing signature")
-    await asyncio.to_thread(_save_today_ack,
-        {"signature": sig, "at": _dt.datetime.now(_dt.timezone.utc).isoformat()})
-    return {"ok": True}
-
-
-@app.get("/.well-known/oauth-protected-resource/mcp")
-async def mcp_oauth_resource_metadata():
-    """RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling
-    service. claude.ai's Custom Connector probes this during OAuth discovery
-    before DCR. Phone-bridge owns root-path Funnel; mcp_pb is at /mcp."""
-    return {
-        "resource": "https://dashboard-server.tail4cfa2.ts.net/mcp",
-        "authorization_servers": ["https://dashboard-server.tail4cfa2.ts.net/mcp"],
-        "scopes_supported": ["mcp"],
-        "bearer_methods_supported": ["header"],
-    }
-
-
-@app.get("/.well-known/oauth-authorization-server/mcp")
-async def mcp_oauth_authorization_server_metadata():
-    """RFC 8414 authorization-server metadata for issuer https://host/mcp.
-    Per RFC 8414, metadata for an issuer with path component lives at
-    /.well-known/oauth-authorization-server/<issuer-path>, which falls on the
-    root-path Funnel (phone-bridge), not on /mcp. Endpoints below are under
-    /mcp/* so they reach mcp_pb."""
-    base = "https://dashboard-server.tail4cfa2.ts.net/mcp"
-    return {
-        "issuer": base,
-        "authorization_endpoint": f"{base}/authorize",
-        "token_endpoint": f"{base}/token",
-        "registration_endpoint": f"{base}/register",
-        "revocation_endpoint": f"{base}/revoke",
-        "scopes_supported": ["mcp"],
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic", "none"],
-        "revocation_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
-        "code_challenge_methods_supported": ["S256"],
-    }
-
-
-# ---------- REST: VAPID/push ----------
-
-@app.get("/api/vapid-public-key")
-async def get_vapid_key():
-    return {"key": settings.vapid_public_key}
-
-
-@app.post("/api/subscribe")
-async def subscribe(sub: dict):
-    push.add_sub(sub)
-    return {"ok": True}
-
-
-@app.post("/api/unsubscribe")
-async def unsubscribe(sub: dict):
-    push.remove_sub(sub)
-    return {"ok": True}
+app.include_router(_meta_router)
+app.include_router(_well_known_router)
+app.include_router(_push_router)
+app.include_router(_today_todos_router)
 
 
 # ---------- REST: workspace browsing ----------
@@ -538,11 +376,6 @@ async def api_sessions_patch(sid: str, body: dict):
     return {"ok": True}
 
 
-@app.get("/api/usage")
-async def api_usage():
-    return db.usage_summary()
-
-
 @app.get("/api/settings/weekly-report")
 async def api_settings_weekly_report_get():
     return report.load()
@@ -587,12 +420,6 @@ async def api_settings_weekly_report_run_now(body: dict | None = None):
     sid, label = await report.run_now(str(state.cwd_root), window=window)
     await _weekly_report_posted(sid, label)
     return {"session_id": sid, "label": label}
-
-
-@app.get("/api/meta")
-async def api_meta():
-    """Static metadata for the UI: available modes & models."""
-    return {"modes": AVAILABLE_MODES, "models": AVAILABLE_MODELS}
 
 
 # ---------- REST: Notion sync (manual trigger + settings) ----------
