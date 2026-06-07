@@ -13,7 +13,6 @@ import logging
 import mimetypes
 import os
 import re
-import secrets
 import shutil
 import sys
 import uuid
@@ -42,8 +41,6 @@ from claude_agent_sdk import (
     ToolUseBlock,
     UserMessage,
 )
-from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
-
 import db
 import push
 import report
@@ -149,15 +146,8 @@ except Exception as e:
     log.exception("PocketBase MCP tools failed to init, continuing without them: %s", e)
 
 
-# Tools that auto-approve in CODE mode. Everything else hits the permission callback.
-AUTO_ALLOW = {
-    "Read", "Glob", "Grep",
-    "WebFetch", "WebSearch",
-    "TodoWrite", "NotebookRead", "BashOutput",
-}
-# In CHAT mode: web browsing + Read (for CHECKIN.md etc.) + Bash (gated by
-# can_use_tool fast-path to localhost PocketBase only — no destructive surface).
-CHAT_TOOLS = {"WebFetch", "WebSearch", "Bash", "Read"}
+from app.agent.permission import AUTO_ALLOW, CHAT_TOOLS, can_use_tool, summarize_input, truncate  # noqa: E402,F401
+
 CHAT_SYSTEM_PROMPT = (
     "You are Claude, a helpful AI assistant. The user is chatting casually. "
     "Be concise, friendly, and direct. You can use WebFetch/WebSearch when needed. "
@@ -200,21 +190,6 @@ from app.persistence.files import (  # noqa: E402,F401  — re-export keeps exis
 from app.ws.broadcast import broadcast  # noqa: E402
 
 
-# ---------- helpers ----------
-
-def truncate(s: str, n: int = 800) -> str:
-    return s if len(s) <= n else s[:n] + f" … ({len(s) - n} more chars)"
-
-
-def summarize_input(tool_input: dict | None) -> str:
-    if not tool_input:
-        return "(no input)"
-    try:
-        return truncate(json.dumps(tool_input, ensure_ascii=False))
-    except (TypeError, ValueError):
-        return truncate(str(tool_input))
-
-
 def _save_msg(role: str, content: dict) -> None:
     if state.session_id:
         db.append_message(state.session_id, role, content)
@@ -235,62 +210,6 @@ async def _weekly_report_posted(sid: str, label: str) -> None:
         )
     except Exception:
         log.exception("weekly report push failed")
-
-
-# ---------- permission callback ----------
-
-async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG001
-    # Fast-path: 打卡 Bash curl to local PocketBase — no phone confirmation needed.
-    # Match strictly on localhost:8090 / 127.0.0.1:8090 to keep blast radius tight.
-    if tool_name == "Bash" and POCKETBASE_URL:
-        cmd = str(tool_input.get("command", ""))
-        if ("127.0.0.1:8090" in cmd or "localhost:8090" in cmd) and \
-                ("curl " in cmd or "curl\n" in cmd):
-            return PermissionResultAllow(behavior="allow", updated_input=None)
-    if tool_name in AUTO_ALLOW:
-        return PermissionResultAllow(behavior="allow", updated_input=None)
-
-    # YOLO toggle: skip the phone prompt entirely. Still surface the
-    # tool call in the chat as a system message so the user has audit
-    # trail of what got auto-run while they were away.
-    if state.auto_approve:
-        await broadcast({
-            "type": "system",
-            "msg": f"🚀 auto-approved {tool_name}",
-        })
-        return PermissionResultAllow(behavior="allow", updated_input=None)
-
-    cb_id = secrets.token_urlsafe(8)
-    fut: asyncio.Future = asyncio.get_running_loop().create_future()
-    state.pending[cb_id] = fut
-    state.pending_meta[cb_id] = {"tool": tool_name, "input": tool_input}
-
-    await broadcast({
-        "type": "permission_request",
-        "id": cb_id,
-        "tool": tool_name,
-        "input": tool_input,
-    })
-    await asyncio.to_thread(
-        push.send_to_all,
-        f"🔧 Claude wants to run {tool_name}",
-        summarize_input(tool_input)[:180],
-        cb_id,
-    )
-
-    try:
-        decision = await asyncio.wait_for(fut, timeout=600)
-    except asyncio.TimeoutError:
-        await broadcast({"type": "system", "msg": f"{tool_name} timed out, denied"})
-        await broadcast({"type": "permission_resolved", "id": cb_id, "decision": "timeout"})
-        return PermissionResultDeny(behavior="deny", message="user did not respond in time")
-    finally:
-        state.pending.pop(cb_id, None)
-        state.pending_meta.pop(cb_id, None)
-
-    if decision == "allow":
-        return PermissionResultAllow(behavior="allow", updated_input=None)
-    return PermissionResultDeny(behavior="deny", message="user rejected via web UI")
 
 
 # ---------- claude session lifecycle ----------
