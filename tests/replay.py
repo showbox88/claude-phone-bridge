@@ -69,7 +69,8 @@ def _normalize_value(key: str, value: Any, remap: dict[str, str],
         return _ISO_TS_RE.sub("<TS>", value)
     if key in {"cost_usd", "duration_ms", "duration_api_ms",
               "input_tokens", "output_tokens", "cache_creation_input_tokens",
-              "cache_read_input_tokens", "num_turns"}:
+              "cache_read_input_tokens", "num_turns",
+              "created_at", "updated_at"}:
         return "<NUM>"
     if key in {"key", "vapid_public_key"} and isinstance(value, str) and len(value) > 40:
         return "<VAPID>"
