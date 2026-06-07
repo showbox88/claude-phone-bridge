@@ -19,7 +19,6 @@ import shutil
 import sys
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -202,37 +201,7 @@ MAX_TEXT_INLINE_CHARS = 50_000   # cap per file when inlining text content
 MAX_SHEET_ROWS_PER_SHEET = 200   # cap rows when converting xlsx to CSV-like text
 
 
-@dataclass
-class AppState:
-    client: ClaudeSDKClient | None = None
-    cwd_root: Path = field(
-        default_factory=lambda: Path(settings.default_cwd or os.getcwd()).resolve()
-    )
-    cwd: Path = field(init=False)
-    websockets: set[WebSocket] = field(default_factory=set)
-    client_tz: str = ""
-    pending: dict[str, asyncio.Future] = field(default_factory=dict)
-    # cb_id -> {tool, input}: keeps the metadata so newly-connected clients
-    # (e.g. the phone PWA after tapping a push notification) can re-render
-    # the permission card on reconnect.
-    pending_meta: dict[str, dict] = field(default_factory=dict)
-    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    current_turn_task: asyncio.Task | None = None
-    session_id: str | None = None        # bridge session id (uuid hex)
-    sdk_session_id: str | None = None    # SDK's session_id, captured per turn
-    mode: str = "code"                   # 'code' | 'chat'
-    model: str = ""                      # model alias or "" for default
-    # YOLO toggle: when on, can_use_tool auto-approves every tool call instead
-    # of broadcasting permission_request. Deliberately NOT persisted — resets
-    # to False on every service restart so it can't quietly stay on across
-    # deploys.
-    auto_approve: bool = False
-
-    def __post_init__(self):
-        self.cwd = self.cwd_root
-
-
-state = AppState()
+from app.state import state  # noqa: E402  — AppState dataclass lives in app/state.py now
 
 
 def uploads_dir() -> Path:
@@ -759,6 +728,12 @@ async def new_session(cwd_rel: str | None = None, mode: str = "code", model: str
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    # Resolve cwd_root from settings before anything else touches it.
+    # app/state.py uses Path.cwd().resolve() as the dataclass default to
+    # avoid importing app.settings at module-load time; lifespan corrects it
+    # here. This will move into app/main.py:lifespan in Task 14.
+    state.cwd_root = Path(settings.default_cwd or os.getcwd()).resolve()
+    state.cwd = state.cwd_root
     push.init()
     db.init(state.cwd_root / ".bridge_data" / "bridge.db")
     uploads_dir()
