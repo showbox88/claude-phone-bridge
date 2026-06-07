@@ -200,6 +200,7 @@ from app.persistence.files import (  # noqa: E402,F401  — re-export keeps exis
     classify_upload,
     _safe_filename,
 )
+from app.ws.broadcast import broadcast  # noqa: E402
 
 
 # ---------- helpers ----------
@@ -215,18 +216,6 @@ def summarize_input(tool_input: dict | None) -> str:
         return truncate(json.dumps(tool_input, ensure_ascii=False))
     except (TypeError, ValueError):
         return truncate(str(tool_input))
-
-
-async def broadcast(msg: dict) -> None:
-    payload = json.dumps(msg, ensure_ascii=False)
-    dead = []
-    for ws in list(state.websockets):
-        try:
-            await ws.send_text(payload)
-        except Exception:
-            dead.append(ws)
-    for ws in dead:
-        state.websockets.discard(ws)
 
 
 def _save_msg(role: str, content: dict) -> None:
