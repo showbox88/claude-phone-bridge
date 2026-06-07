@@ -194,32 +194,35 @@ def notion_post(path: str, body: dict) -> dict:
     return data
 
 
-_pb_token: str | None = None
+# Phase 1: PB calls go through the unified app.integrations.pb client.
+# Notion calls still use the local http() helper above — they talk to
+# api.notion.com, not PB.
 
-def pb_token() -> str:
-    global _pb_token
-    if _pb_token:
-        return _pb_token
-    url = os.environ["POCKETBASE_URL"].rstrip("/") + "/api/collections/_superusers/auth-with-password"
-    code, data = http("POST", url, headers={"Content-Type": "application/json"}, body={
-        "identity": os.environ["POCKETBASE_ADMIN_EMAIL"],
-        "password":  os.environ["POCKETBASE_ADMIN_PASSWORD"],
-    })
-    if code != 200:
-        raise RuntimeError(f"PB auth: {code} {data}")
-    _pb_token = data["token"]
-    return _pb_token
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+
+from app.integrations.pb import PBClient  # noqa: E402
+from app.settings import settings  # noqa: E402
+
+_pb_client: PBClient | None = None
+
+
+def _pb_client_instance() -> PBClient:
+    global _pb_client
+    if _pb_client is None:
+        _pb_client = PBClient(
+            settings.pocketbase_url,
+            settings.pocketbase_admin_email,
+            settings.pocketbase_admin_password,
+        )
+    return _pb_client
 
 
 def pb(method: str, path: str, body: dict | None = None) -> dict:
-    url = os.environ["POCKETBASE_URL"].rstrip("/") + path
-    code, data = http(method, url, headers={
-        "Authorization": pb_token(),
-        "Content-Type": "application/json",
-    }, body=body)
-    if code >= 400:
-        raise RuntimeError(f"PB {method} {path}: {code} {data}")
-    return data
+    """Back-compat wrapper for the script's existing call sites."""
+    return _pb_client_instance().request(method, path, body=body)
 
 
 # ---------------------------------------------------------------------------

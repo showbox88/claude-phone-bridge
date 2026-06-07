@@ -78,8 +78,7 @@ def ensure_pipeline_fields(pb: PBClient, collection: str) -> dict:
         index_added = True
 
     if added or index_added:
-        pb._http("PATCH", f"/api/collections/{collection}",  # noqa: SLF001
-                  body={"fields": fields, "indexes": indexes})
+        pb.update_collection(collection, {"fields": fields, "indexes": indexes})
     return {"fields_added": added, "index_added": index_added}
 
 
@@ -156,7 +155,7 @@ def add_collection_to_sync_activity(
 
 
 def _get_collection(pb: PBClient, name: str) -> dict:
-    return pb._http("GET", f"/api/collections/{name}")  # noqa: SLF001
+    return pb.get_collection(name)
 
 
 def _pb_field_to_notion_property_definition(
@@ -193,7 +192,7 @@ def _pb_field_to_notion_property_definition(
         if not target_id:
             return None
         try:
-            target_coll = pb._http("GET", f"/api/collections/{target_id}")  # noqa: SLF001
+            target_coll = pb.get_collection(target_id)
             target_name = target_coll.get("name", "")
         except Exception:
             return None

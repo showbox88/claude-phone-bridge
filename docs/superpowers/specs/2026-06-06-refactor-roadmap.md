@@ -35,7 +35,7 @@
 |---|---|---|---|---|---|
 | -1 护栏 | ✅ 已合并 | `refactor/phase-minus1-guardrails` | 2026-06-06 | `3e60173` | CHANGELOG §Phase -1 |
 | 0 地基 | ✅ 已合并 | `refactor/phase-0-foundation` | 2026-06-06 | `df169fe` | CHANGELOG §Phase 0 |
-| 1 PB 统一 | ⏳ 待开始 | `refactor/phase-1-pb-client` | — | — | — |
+| 1 PB 统一 | 🚧 已部署 待合并 | `refactor/phase-1-pb-client` | 2026-06-07 | `4fee31e`（tip） | CHANGELOG §Phase 1 |
 | 2 拆包 | ⏳ 待开始 | `refactor/phase-2-app-package` | — | — | — |
 | 3 Session 多实例 | ⏳ 待开始 | `refactor/phase-3-session-manager` | — | — | — |
 | 4 前端 | ⏳ 待开始 | `refactor/phase-4-frontend-modules` | — | — | — |
@@ -46,7 +46,7 @@
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase 1 · 统一 PB 客户端 + MCP 工具单源
+👉 **下一步执行**：Phase 2 · 后端拆包 `server.py` → `app/`
 
 下次开新窗口直接说"继续重构路线图"或贴这一行即可。
 

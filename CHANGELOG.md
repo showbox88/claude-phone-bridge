@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-06-07 — Phase 1 · 统一 PB 客户端 + MCP 工具单源
+
+**Branch:** `refactor/phase-1-pb-client` (10 commits, `ebfc064..4fee31e` + plan `c5f41ac`)
+**实际工时:** 约 3 小时（含调研、计划、执行、deploy）
+
+### 落地的事
+- `app/integrations/pb/` 新包：`client.py` (PBClient + AsyncPBClient + 5xx/429 退避 + 401 强制重 auth)、`exceptions.py` (PBError / PBHTTPError / PBAuthError / PBNetworkError)、`token.py` (`refresh_token_into_env` 副信道 helper)
+- `tests/test_pb_client.py` 12 单元测试覆盖：auth + GET / 401 重 auth / 401 持续 → PBAuthError / 5xx 退避后成功 / 5xx 耗尽 → PBHTTPError / 429 honors Retry-After / 4xx 非 401/429 立即 raise / 网络错重试 → PBNetworkError / list_page envelope / list_all 自动分页 / create+update(PATCH)+delete / collection CRUD
+- `notion_sync/pb_api.py` 缩成 46 行 shim（继承 `PBClient`，19 个 caller 不动）
+- `notion_sync/provisioner.py` 3 处 `pb._http(...)` SLF001 → `pb.update_collection / pb.get_collection`
+- `pocketbase/migrate_notion.py` PB 部分（~25 行）改用 `PBClient`，保留 Notion `http()` 给 Notion API 调用
+- `mcp_pb/server.py` 删除 ~40 行 PB HTTP boilerplate；10 个 `@mcp.tool` 函数体每个 1-2 行；描述用 `mcp.tool(description=TOOL_DESCRIPTIONS["..."])`
+- `pb_tools.py` 删除 ~50 行 PB HTTP boilerplate；10 PB 工具 + smartnote + 2 sync 工具改用 `AsyncPBClient`；`_schedule_auto_sync` debounce 保留；文件从 685 → 550 行 (-135 行)
+- `server.py` `_pb_refresh_token` + `_pb_get_json` 走 `PBClient` + `refresh_token_into_env`；运行时彻底无 `os.environ.get("PB_TOKEN")`
+- `app/agent/mcp_tools/prompts.py` 11 个工具的描述 + JSON schema 单源；FastMCP 用 `description=` kwarg，SDK MCP 用 `@tool(name, desc, schema)`
+
+### 闸门
+- ✅ test_pb_client 12/12，test_settings 4/4，test_io_utils 8/8，notion_sync 106/107（test_icons pre-existing）
+- ✅ smoke 0.7s 跑过生产
+- ✅ journal 日志 `app.pb.token INFO PB token refreshed (len=223)` 证明新 helper 生效
+- ✅ child Bash 副信道 contract 验证：Python `os.environ["PB_TOKEN"] = ...` → subprocess.run 子进程能看到
+- ✅ 运行时无 PB_TOKEN 直接 os.environ 读（grep 验证）
+- ✅ deploy 成功，health 1 次过，无新 ERROR
+
+### 偏离计划
+1. **`notion_sync/pb_api.py` shim 保留 `_http()` 别名**：plan 让 shim 只暴露公开方法；但 `provisioner.py` 在 Task 5 commit 后、Task 6 修复前会因找不到 `_http` 而坏掉。解决方案：shim 加 `_http = request` 别名，Task 6 再清理 caller。一次性 back-compat。
+2. **FastMCP 用 `description=` kwarg 而不是 docstring**：plan 在 Task 8 step 4 写"如果支持"。实测 mcp 1.27 的 `FastMCP.tool` 签名包含 `description=` 参数，直接用。每个工具的 docstring 删除，描述全部来自 prompts.py。彻底单源。
+3. **`pb_tools.py` 2 个额外 sync 工具迁移**：plan 只提了 10 PB 工具 + smartnote；实际 `sync_pause` / `sync_resume` 也用 `_pb("METHOD", path, body)` 调用 PB，顺手一并迁移到 `_pb().list_page / update_record`。
+4. **PB_TOKEN 副信道验证用 contract 测试**：plan 想验证 `/proc/<pid>/environ`，但 Linux 那里只反映 execve 时刻的 env，不反映 Python 运行时 `os.environ` 修改。改为在生产上跑 `os.environ["PB_TOKEN"] = "x"; subprocess.run(["bash", "-c", "echo $PB_TOKEN"])` 验证 Python → child Bash 这条边能传值。已 confirmed。
+5. **跳过 24h staging soak**：Phase 0 也跳过了；考虑到 Phase 1 改动的是 hot path，建议接下来 Phase 2 强制 48h soak。
+
+### 量化
+- 删除 PB HTTP / auth boilerplate 约 **165 行**（5 个文件累加）
+- 新增 PBClient 核心 + 测试 **441 行**（client.py 360 + exceptions.py 58 + token.py 23）
+- 新增 prompts.py 单源 **180 行**
+- 净增加 ~460 行，但**消除 5 处 client 漂移 + 2 处工具描述漂移 + 0 处运行时 PB_TOKEN 直读**
+
+### 下一步
+👉 Phase 2 · 后端拆包 `server.py` → `app/`
+新窗口续接指令："继续重构路线图，从 Phase 2 开始"
+
+---
+
 ## 2026-06-06 — Phase 0 · 地基（settings / paths / 原子 IO / 锁版本 / WAL）
 
 **Branch:** `refactor/phase-0-foundation` (15 commits, `fed6b23..a4994f9`)
