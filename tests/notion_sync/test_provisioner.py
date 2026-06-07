@@ -18,24 +18,21 @@ class FakePB:
             return list(self.sync_rows)
         return []
 
-    def _http(self, method, path, body=None):    # noqa: ARG002
-        if method == "GET" and path.startswith("/api/collections/"):
-            name_or_id = path.rsplit("/", 1)[-1]
-            for c in self.collections.values():
-                if c["name"] == name_or_id or c["id"] == name_or_id:
-                    return c
-            raise RuntimeError(f"collection not found: {name_or_id}")
-        if method == "PATCH" and path.startswith("/api/collections/"):
-            name = path.rsplit("/", 1)[-1]
-            if name not in self.collections:
-                raise RuntimeError(f"collection not found: {name}")
-            # Apply the patch in-place so subsequent GETs see the update.
-            if "fields" in body:
-                self.collections[name]["fields"] = body["fields"]
-            if "indexes" in body:
-                self.collections[name]["indexes"] = body["indexes"]
-            return self.collections[name]
-        raise NotImplementedError(method, path)
+    def get_collection(self, name_or_id):
+        for c in self.collections.values():
+            if c["name"] == name_or_id or c["id"] == name_or_id:
+                return c
+        raise RuntimeError(f"collection not found: {name_or_id}")
+
+    def update_collection(self, name, body):
+        if name not in self.collections:
+            raise RuntimeError(f"collection not found: {name}")
+        # Apply the patch in-place so subsequent GETs see the update.
+        if "fields" in body:
+            self.collections[name]["fields"] = body["fields"]
+        if "indexes" in body:
+            self.collections[name]["indexes"] = body["indexes"]
+        return self.collections[name]
 
 
 class FakeNotion:
