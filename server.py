@@ -15,14 +15,13 @@ import os
 import re
 import shutil
 import sys
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import (
-    FastAPI, File, Form, HTTPException, Request, Response, UploadFile,
+    FastAPI, HTTPException, Request, Response,
     WebSocket, WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
@@ -273,107 +272,17 @@ from app.api.meta import router as _meta_router  # noqa: E402
 from app.api.well_known import router as _well_known_router  # noqa: E402
 from app.api.push import router as _push_router  # noqa: E402
 from app.api.today_todos import router as _today_todos_router  # noqa: E402
+from app.api.browse import router as _browse_router  # noqa: E402
+from app.api.sessions import router as _sessions_router  # noqa: E402
+from app.api.uploads import router as _uploads_router  # noqa: E402
 
 app.include_router(_meta_router)
 app.include_router(_well_known_router)
 app.include_router(_push_router)
 app.include_router(_today_todos_router)
-
-
-# ---------- REST: workspace browsing ----------
-
-@app.get("/api/browse")
-async def browse(path: str = ""):
-    target = _resolve_in_root(path)
-    if target is None or not target.is_dir():
-        raise HTTPException(404, "not a directory or outside root")
-    entries = []
-    try:
-        for e in sorted(target.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
-            if e.name.startswith("."):
-                continue
-            try:
-                is_dir = e.is_dir()
-                size = e.stat().st_size if not is_dir else 0
-            except OSError:
-                continue
-            entries.append({"name": e.name, "is_dir": is_dir, "size": size})
-    except PermissionError:
-        raise HTTPException(403, "permission denied")
-    rel = _to_rel(target)
-    parent = None
-    if rel:
-        parent = _to_rel(target.parent)
-    return {
-        "root": str(state.cwd_root).replace("\\", "/"),
-        "path": rel,
-        "abs": str(target).replace("\\", "/"),
-        "parent": parent,
-        "entries": entries,
-        "current": _to_rel(state.cwd),
-    }
-
-
-@app.post("/api/mkdir")
-async def mkdir(body: dict):
-    name = (body.get("name", "") or "").strip()
-    if not name or any(c in name for c in "/\\:*?\"<>|") or name in (".", "..") or len(name) > 100:
-        raise HTTPException(400, "invalid folder name")
-    base = _resolve_in_root(body.get("path", ""))
-    if base is None or not base.is_dir():
-        raise HTTPException(404, "base not a directory")
-    new_dir = base / name
-    if _resolve_in_root(_to_rel(new_dir)) is None:
-        raise HTTPException(400, "outside root")
-    try:
-        new_dir.mkdir(exist_ok=False)
-    except FileExistsError:
-        raise HTTPException(409, "already exists")
-    except OSError as e:
-        raise HTTPException(500, str(e))
-    return {"ok": True, "path": _to_rel(new_dir)}
-
-
-# ---------- REST: sessions ----------
-
-@app.get("/api/sessions")
-async def api_sessions_list(q: str = ""):
-    return {
-        "current": state.session_id,
-        "sessions": db.search_sessions(q) if q.strip() else db.list_sessions(),
-        "query": q,
-    }
-
-
-@app.post("/api/sessions")
-async def api_sessions_create(body: dict | None = None):
-    body = body or {}
-    sid = await new_session(
-        cwd_rel=body.get("cwd"),
-        mode=body.get("mode") or "code",
-        model=body.get("model") or "",
-    )
-    return {"id": sid}
-
-
-@app.get("/api/sessions/{sid}")
-async def api_sessions_get(sid: str):
-    sess = db.get_session(sid)
-    if not sess:
-        raise HTTPException(404, "session not found")
-    return sess
-
-
-@app.patch("/api/sessions/{sid}")
-async def api_sessions_patch(sid: str, body: dict):
-    upd: dict[str, Any] = {}
-    if "title" in body: upd["title"] = str(body["title"])[:80]
-    if "mode" in body and body["mode"] in ("code", "chat"): upd["mode"] = body["mode"]
-    if "model" in body: upd["model"] = str(body["model"])[:32]
-    if not upd:
-        raise HTTPException(400, "nothing to update")
-    db.update_session(sid, **upd)
-    return {"ok": True}
+app.include_router(_browse_router)
+app.include_router(_sessions_router)
+app.include_router(_uploads_router)
 
 
 @app.get("/api/settings/weekly-report")
@@ -1020,94 +929,6 @@ async def api_poi_around(lat: float, lng: float, radius: int = 200):
     # Foursquare first → richest commercial names; 高德 catches Chinese POIs.
     merged = _merge_pois([fsq_pois, amap_pois, osm_pois])
     return {"pois": merged[:15], "lat": lat, "lng": lng, "radius_m": radius}
-
-
-@app.delete("/api/sessions/{sid}")
-async def api_sessions_delete(sid: str):
-    sess = db.get_session(sid)
-    if not sess:
-        raise HTTPException(404, "session not found")
-    db.delete_session(sid)
-    # remove uploads dir for this session
-    sdir = uploads_dir() / sid
-    if sdir.is_dir():
-        with contextlib.suppress(OSError):
-            shutil.rmtree(sdir)
-    if state.session_id == sid:
-        # spin up a new session as current
-        latest = db.latest_session_id()
-        if latest:
-            await open_session(latest)
-        else:
-            await new_session()
-    return {"ok": True, "current": state.session_id}
-
-
-# ---------- REST: image upload ----------
-
-@app.post("/api/upload")
-async def api_upload(
-    session_id: str = Form(...),
-    files: list[UploadFile] = File(...),
-):
-    sess = db.get_session(session_id)
-    if not sess:
-        raise HTTPException(404, "session not found")
-    if len(files) > MAX_IMAGES_PER_MESSAGE:
-        raise HTTPException(400, f"too many files (max {MAX_IMAGES_PER_MESSAGE})")
-
-    sdir = uploads_dir() / session_id
-    sdir.mkdir(parents=True, exist_ok=True)
-
-    saved: list[dict] = []
-    for f in files:
-        original_name = f.filename or "upload.bin"
-        ext_in = Path(original_name).suffix.lower()
-        mime = (f.content_type or "").lower()
-        kind = classify_upload(original_name, mime)
-        if not kind:
-            raise HTTPException(400, f"unsupported file type: {original_name}")
-        # Sanitize the user's original filename; this becomes the on-disk
-        # basename so Claude (and `ls`) see the real name.
-        safe_name = _safe_filename(original_name)
-        # If the sanitized name has no extension AND we have a higher-confidence
-        # mime-derived one for images, append it. Other kinds keep whatever the
-        # user provided (PDF/text/sheet extensions are already meaningful).
-        if "." not in safe_name and kind == "image" and mime in ALLOWED_IMAGE_MIMES:
-            guessed = mimetypes.guess_extension(mime) or ""
-            if guessed == ".jpe":
-                guessed = ".jpg"
-            if guessed:
-                safe_name = safe_name + guessed
-        # Each file gets its own short-uuid subdir; eliminates name collisions
-        # within a session and keeps cleanup as a single rmtree.
-        uid = uuid.uuid4().hex[:8]
-        sub = sdir / uid
-        sub.mkdir(parents=True, exist_ok=True)
-        dest = sub / safe_name
-        name = f"{uid}/{safe_name}"  # used in the relative path below
-        size = 0
-        with dest.open("wb") as out:
-            while True:
-                chunk = await f.read(64 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_UPLOAD_BYTES:
-                    out.close()
-                    dest.unlink(missing_ok=True)
-                    raise HTTPException(413, f"file too large (>{MAX_UPLOAD_BYTES} bytes)")
-                out.write(chunk)
-        rel = f"{session_id}/{name}"
-        saved.append({
-            "path": rel,
-            "url": f"/uploads/{rel}",
-            "mime": mime or mimetypes.guess_type(original_name)[0] or "",
-            "size": size,
-            "name": original_name,
-            "kind": kind,  # 'image' | 'pdf' | 'text' | 'sheet'
-        })
-    return {"files": saved}
 
 
 # ---------- WebSocket ----------
