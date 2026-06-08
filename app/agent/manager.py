@@ -25,7 +25,14 @@ class SessionManager:
     async def get_or_create(self, sid: str, *, cwd: Path,
                             mode: str = "code", model: str = "",
                             sdk_session_id: str | None = None) -> ClaudeAgent:
-        """Return existing agent for sid; create + connect if absent."""
+        """Return existing agent for sid; create + connect if absent.
+
+        Race safety: the new agent is inserted into the registry BEFORE
+        awaiting `_connect`. A concurrent caller for the same sid will
+        find the partially-initialized agent (client=None) and return
+        it instead of constructing a parallel client. If `_connect`
+        fails, the slot is rolled back and the exception propagates.
+        """
         existing = self._agents.get(sid)
         if existing is not None:
             return existing
@@ -33,8 +40,15 @@ class SessionManager:
             session_id=sid, cwd=cwd, mode=mode, model=model,
             sdk_session_id=sdk_session_id,
         )
-        await self._connect(agent)
+        # Reserve slot before the await — prevents the second concurrent
+        # call from building a parallel client.
         self._agents[sid] = agent
+        try:
+            await self._connect(agent)
+        except BaseException:
+            # Roll back so a retry doesn't see a half-dead agent.
+            self._agents.pop(sid, None)
+            raise
         return agent
 
     async def _connect(self, agent: ClaudeAgent) -> None:
