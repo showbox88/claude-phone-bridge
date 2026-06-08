@@ -36,6 +36,15 @@ from app.state import state
 from app.ws.broadcast import broadcast
 
 log = logging.getLogger("bridge")
+
+
+def _recorder():
+    # Lazy lookup so server.py's BRIDGE_RECORD-init runs first. Returns
+    # the Recorder instance or None.
+    import server
+    return getattr(server, "_recorder", None)
+
+
 router = APIRouter()
 
 
@@ -49,6 +58,23 @@ async def ws_handler(ws: WebSocket):
             await ws.close(code=4401)
             return
     await ws.accept()
+    rec = _recorder()
+    if rec:
+        rec.ws_open()
+        _orig_send = ws.send_text
+        _orig_recv = ws.receive_text
+
+        async def _rec_send(text):
+            await _orig_send(text)
+            rec.ws_frame("out", text)
+
+        async def _rec_recv():
+            text = await _orig_recv()
+            rec.ws_frame("in", text)
+            return text
+
+        ws.send_text = _rec_send  # type: ignore[method-assign]
+        ws.receive_text = _rec_recv  # type: ignore[method-assign]
     state.websockets.add(ws)
     log.info("websocket connected (total=%d)", len(state.websockets))
     try:
@@ -90,6 +116,8 @@ async def ws_handler(ws: WebSocket):
         pass
     finally:
         state.websockets.discard(ws)
+        if rec:
+            rec.ws_close(None)
         log.info("websocket closed (remaining=%d)", len(state.websockets))
 
 

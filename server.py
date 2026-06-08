@@ -9,7 +9,7 @@ Kept so:
 Phase 6 cleanup: switch the systemd unit to `app.main:app` and delete
 this file.
 """
-from app.main import app, _pb_client  # noqa: F401
+from app.main import app, _pb_client, _recorder  # noqa: F401
 
 if __name__ == "__main__":
     import uvicorn
