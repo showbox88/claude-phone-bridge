@@ -95,6 +95,7 @@ async def _pb_refresh_loop() -> None:
 # Side-effect import: builds PB_MCP_SERVER at module load (safe-guarded).
 from app.agent.options import PB_MCP_SERVER  # noqa: E402, F401
 from app.agent.session import new_session, open_session  # noqa: E402
+from app.agent.manager import manager  # noqa: E402
 from app.reporting.weekly_report import _weekly_report_posted  # noqa: E402
 
 
@@ -122,7 +123,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         else:
             await new_session()
     except Exception as e:
-        log.exception("initial Claude session failed: %s", e)
+        log.exception("initial Claude session warm-up failed: %s", e)
     yield
     if pb_task is not None:
         pb_task.cancel()
@@ -131,9 +132,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     report_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await report_task
-    with contextlib.suppress(Exception):
-        from app.agent.manager import manager as _manager
-        await _manager.shutdown()
+    await manager.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)
