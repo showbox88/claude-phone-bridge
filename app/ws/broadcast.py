@@ -21,3 +21,9 @@ async def broadcast(msg: dict) -> None:
             dead.append(ws)
     for ws in dead:
         state.websockets.discard(ws)
+
+
+async def broadcast_to_agent(agent, msg: dict) -> None:
+    """Phase-3-Task-6 stub: forwards to broadcast() for now. Task 8
+    replaces with WS-binding-aware routing."""
+    await broadcast(msg)

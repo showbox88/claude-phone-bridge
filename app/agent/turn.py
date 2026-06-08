@@ -1,13 +1,17 @@
 """A single user-turn through the Claude SDK.
 
-`run_user_turn(text, images, files)` is what `/ws` handle_ws_message
+`run_user_turn(agent, text, images, files)` is what `/ws` handle_ws_message
 calls for every incoming `user_message` frame. It:
-1. Acquires `state.turn_lock` (serialize one turn at a time).
+1. Acquires `agent.turn_lock` (serialize one turn at a time for this session).
 2. Auto-titles the session from the first message.
 3. Persists the user message + builds the SDK content payload.
 4. Streams the SDK response, broadcasting each block + persisting
    assistant_text / tool_use / tool_result rows.
 5. On ResultMessage: records usage + cost, broadcasts turn_done.
+
+`current_agent` ContextVar is set at the top of the turn so the SDK
+permission callback (can_use_tool) can find the active agent without a
+signature change at the SDK boundary.
 
 `_save_msg` and `_block_to_event` are helpers; they're exported because
 the ws handler still uses _save_msg directly for user-side cancellation
@@ -28,17 +32,16 @@ from claude_agent_sdk import (
 
 import db
 
+from app.agent.agent import current_agent
 from app.agent.content import _build_user_content
 from app.agent.permission import truncate
-from app.state import state
-from app.ws.broadcast import broadcast
+from app.ws.broadcast import broadcast_to_agent
 
 log = logging.getLogger("bridge")
 
 
-def _save_msg(role: str, content: dict) -> None:
-    if state.session_id:
-        db.append_message(state.session_id, role, content)
+def _save_msg(agent, role: str, content: dict) -> None:
+    db.append_message(agent.session_id, role, content)
 
 
 def _block_to_event(block) -> dict | None:
@@ -71,58 +74,58 @@ def _block_to_event(block) -> dict | None:
 
 
 async def run_user_turn(
-    text: str, images: list[str] | None = None, files: list[str] | None = None
+    agent, text: str, images: list[str] | None = None,
+    files: list[str] | None = None,
 ) -> None:
     images = images or []
     files = files or []
-    async with state.turn_lock:
-        if state.client is None or state.session_id is None:
-            await broadcast({"type": "error", "msg": "no active session"})
+    current_agent.set(agent)
+    async with agent.turn_lock:
+        if agent.client is None:
+            await broadcast_to_agent(agent,
+                {"type": "error", "msg": "no active session"})
             return
         # auto-title from first user message in this session
-        sess = db.get_session(state.session_id)
+        sess = db.get_session(agent.session_id)
         if sess is not None and not sess["title"] and text:
-            db.update_session(state.session_id, title=text.strip()[:40])
+            db.update_session(agent.session_id, title=text.strip()[:40])
 
-        # persist user message (with attachment metadata) before sending
-        _save_msg("user", {"text": text, "images": images, "files": files})
-
-        # Build structured content (text + image blocks) and stream into SDK
+        _save_msg(agent, "user",
+                  {"text": text, "images": images, "files": files})
         content = _build_user_content(text, images, files)
 
         async def msg_stream():
-            yield {
-                "type": "user",
-                "message": {"role": "user", "content": content},
-                "parent_tool_use_id": None,
-            }
+            yield {"type": "user",
+                   "message": {"role": "user", "content": content},
+                   "parent_tool_use_id": None}
 
         try:
-            await state.client.query(msg_stream())
-            async for msg in state.client.receive_response():
+            await agent.client.query(msg_stream())
+            async for msg in agent.client.receive_response():
                 if isinstance(msg, (AssistantMessage, UserMessage)):
                     for block in getattr(msg, "content", []) or []:
                         ev = _block_to_event(block)
                         if ev is None:
                             continue
-                        await broadcast(ev)
-                        # persist assistant/tool blocks
+                        await broadcast_to_agent(agent, ev)
                         if ev["type"] == "assistant_text":
-                            _save_msg("assistant_text", {"text": ev["text"]})
+                            _save_msg(agent, "assistant_text", {"text": ev["text"]})
                         elif ev["type"] == "tool_use":
-                            _save_msg("tool_use", {
-                                "id": ev["id"], "tool": ev["tool"], "input": ev["input"],
+                            _save_msg(agent, "tool_use", {
+                                "id": ev["id"], "tool": ev["tool"],
+                                "input": ev["input"],
                             })
                         elif ev["type"] == "tool_result":
-                            _save_msg("tool_result", {
-                                "id": ev["id"], "ok": ev["ok"], "content": ev["content"],
+                            _save_msg(agent, "tool_result", {
+                                "id": ev["id"], "ok": ev["ok"],
+                                "content": ev["content"],
                             })
                 elif isinstance(msg, ResultMessage):
-                    sid = getattr(msg, "session_id", None)
-                    if sid:
-                        state.sdk_session_id = sid
-                        if state.session_id:
-                            db.update_session(state.session_id, sdk_session_id=sid)
+                    sid_from_sdk = getattr(msg, "session_id", None)
+                    if sid_from_sdk:
+                        agent.sdk_session_id = sid_from_sdk
+                        db.update_session(agent.session_id,
+                                          sdk_session_id=sid_from_sdk)
                     cost = getattr(msg, "total_cost_usd", None) or 0.0
                     usage = getattr(msg, "usage", None) or {}
                     in_tok = int(usage.get("input_tokens") or 0)
@@ -131,22 +134,18 @@ async def run_user_turn(
                     cache_create = int(usage.get("cache_creation_input_tokens") or 0)
                     duration = int(getattr(msg, "duration_ms", 0) or 0)
                     nturns = int(getattr(msg, "num_turns", 0) or 0)
-                    if state.session_id:
-                        db.append_turn(
-                            state.session_id,
-                            model=state.model,
-                            mode=state.mode,
-                            duration_ms=duration,
-                            num_turns=nturns,
-                            input_tokens=in_tok,
-                            output_tokens=out_tok,
-                            cache_read_tokens=cache_read,
-                            cache_create_tokens=cache_create,
-                            cost_usd=float(cost),
-                        )
-                    await broadcast({
+                    db.append_turn(
+                        agent.session_id,
+                        model=agent.model, mode=agent.mode,
+                        duration_ms=duration, num_turns=nturns,
+                        input_tokens=in_tok, output_tokens=out_tok,
+                        cache_read_tokens=cache_read,
+                        cache_create_tokens=cache_create,
+                        cost_usd=float(cost),
+                    )
+                    await broadcast_to_agent(agent, {
                         "type": "turn_done",
-                        "session_id": sid,
+                        "session_id": sid_from_sdk,
                         "cost_usd": cost,
                         "input_tokens": in_tok,
                         "output_tokens": out_tok,
@@ -154,8 +153,10 @@ async def run_user_turn(
                     })
                     break
         except asyncio.CancelledError:
-            await broadcast({"type": "system", "msg": "turn cancelled"})
+            await broadcast_to_agent(agent,
+                {"type": "system", "msg": "turn cancelled"})
             raise
         except Exception as e:
             log.exception("turn failed")
-            await broadcast({"type": "error", "msg": f"{type(e).__name__}: {e}"})
+            await broadcast_to_agent(agent,
+                {"type": "error", "msg": f"{type(e).__name__}: {e}"})
