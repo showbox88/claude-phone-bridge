@@ -1,8 +1,8 @@
 """Bridge-session CRUD routes (5).
 
-Backed by db.* SQLite. Delete also tears down the uploads dir for that
-session and, if it was the active session, switches to whatever became
-latest_session_id (or spins up a fresh one).
+Backed by db.* SQLite. Delete also destroys any live ClaudeAgent for the
+session (via the manager) and tears down its uploads dir. Spinning up a
+replacement session is the WS handler's job (cmd:delete_session).
 """
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from fastapi import APIRouter, HTTPException
 
 import db
 
-from app.agent.session import new_session, open_session
+from app.agent.manager import manager
+from app.agent.session import new_session
 from app.persistence.files import uploads_dir
-from app.state import state
 
 router = APIRouter()
 
@@ -24,7 +24,7 @@ router = APIRouter()
 @router.get("/api/sessions")
 async def api_sessions_list(q: str = ""):
     return {
-        "current": state.session_id,
+        "current": db.latest_session_id(),
         "sessions": db.search_sessions(q) if q.strip() else db.list_sessions(),
         "query": q,
     }
@@ -66,17 +66,10 @@ async def api_sessions_delete(sid: str):
     sess = db.get_session(sid)
     if not sess:
         raise HTTPException(404, "session not found")
+    await manager.destroy(sid)
     db.delete_session(sid)
-    # remove uploads dir for this session
     sdir = uploads_dir() / sid
     if sdir.is_dir():
         with contextlib.suppress(OSError):
             shutil.rmtree(sdir)
-    if state.session_id == sid:
-        # spin up a new session as current
-        latest = db.latest_session_id()
-        if latest:
-            await open_session(latest)
-        else:
-            await new_session()
-    return {"ok": True, "current": state.session_id}
+    return {"ok": True, "current": db.latest_session_id()}

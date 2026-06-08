@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 
 import db
 
+from app.agent.manager import manager
 from app.agent.options import AVAILABLE_MODELS, AVAILABLE_MODES
 from app.auth.middleware import _current_device
 from app.auth.state import auth_state
@@ -27,10 +28,17 @@ async def api_health(request: Request):
     base.update({
         "name": settings.bridge_name or socket.gethostname(),
         "cwd_root": str(state.cwd_root).replace("\\", "/"),
-        "session_id": state.session_id,
-        "mode": state.mode,
-        "model": state.model or "",
+        "active_sessions": manager.active_ids(),
     })
+    latest_sid = db.latest_session_id()
+    if latest_sid:
+        agent = manager.get(latest_sid)
+        if agent:
+            base.update({
+                "session_id": agent.session_id,
+                "mode": agent.mode,
+                "model": agent.model or "",
+            })
     return base
 
 

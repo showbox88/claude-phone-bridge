@@ -104,7 +104,6 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     # app/state.py uses Path.cwd().resolve() as the dataclass default to
     # avoid importing app.settings at module-load time; lifespan corrects it.
     state.cwd_root = Path(settings.default_cwd or os.getcwd()).resolve()
-    state.cwd = state.cwd_root
     push.init()
     db.init(state.cwd_root / ".bridge_data" / "bridge.db")
     uploads_dir()
@@ -132,9 +131,9 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     report_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await report_task
-    if state.client is not None:
-        with contextlib.suppress(Exception):
-            await state.client.disconnect()
+    with contextlib.suppress(Exception):
+        from app.agent.manager import manager as _manager
+        await _manager.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)

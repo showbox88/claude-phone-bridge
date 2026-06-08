@@ -1,12 +1,12 @@
 """Claude Agent SDK options builder.
 
-`make_options(resume_sdk_id)` produces the `ClaudeAgentOptions` passed to
+`make_options(agent)` produces the `ClaudeAgentOptions` passed to
 `ClaudeSDKClient(options=...)` per session. It assembles:
-- cwd from `state.cwd`
+- cwd from `agent.cwd`
 - the permission callback (`can_use_tool`)
 - mode-specific system prompt + allowed tools
 - PocketBase MCP server registration (if env-configured)
-- runtime timezone note (if `state.client_tz` is set)
+- runtime timezone note (if `agent.client_tz` is set)
 - model override / resume id
 
 `PB_MCP_SERVER` is built once at module import; if init fails the service
