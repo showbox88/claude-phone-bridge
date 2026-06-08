@@ -26,6 +26,10 @@ class AppState:
     cwd_root: Path = field(default_factory=lambda: Path.cwd().resolve())
     cwd: Path = field(init=False)
     websockets: set["WebSocket"] = field(default_factory=set)
+    # Per-WS session binding: which session a given WebSocket is currently
+    # "watching". Set on connect (from hello) and on cmd:load_session.
+    # Lets broadcast_to_agent fan out only to the right subscribers.
+    ws_sessions: "dict[WebSocket, str]" = field(default_factory=dict)
     client_tz: str = ""
     pending: dict[str, asyncio.Future] = field(default_factory=dict)
     # cb_id -> {tool, input}: keeps the metadata so newly-connected clients
