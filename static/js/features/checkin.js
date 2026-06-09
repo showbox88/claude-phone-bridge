@@ -21,12 +21,33 @@
  */
 import { apiGet } from '../api.js';
 import { sendCheckin } from '../composer/send.js';
+import { openDialog } from '../util/dialog.js';
 import {
   checkinDialog, cdStatus, cdList, cdManualName, cdManualGo,
   cdStageList, cdStageForm, cdBack, cdFormName, cdFormMeta,
   cdActivity, cdAmount, cdCurrency, cdScore, cdScoreVal, cdNote,
   cdBuildLoc, cdSubmit,
 } from '../dom.js';
+
+// Phase 4 Task 18: cache the close fn returned by openDialog so cancel/submit
+// paths dismiss whether we took the native showModal path or the iOS 14
+// class-fallback path. _isDialogOpen() is used in place of `dialog.open` so
+// the polling code (POI list refresh) works on both paths.
+let _closeCheckinDialog = null;
+function _closeDialog() {
+  if (_closeCheckinDialog) {
+    _closeCheckinDialog();
+    _closeCheckinDialog = null;
+    // The native path fires the `close` event which runs resetCheckinDialog;
+    // the fallback path doesn't, so do it explicitly here.
+    if (checkinDialog && !checkinDialog.hasAttribute('open')) {
+      resetCheckinDialog();
+    }
+  }
+}
+function _isDialogOpen() {
+  return !!checkinDialog && (checkinDialog.open || checkinDialog.classList.contains('dialog-open'));
+}
 
 const GPS_CACHE_KEY = 'bridge.lastGps';
 const GPS_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -183,8 +204,8 @@ export function stageManualEntry(gps) {
 }
 
 export async function openCheckinDialog() {
-  if (!checkinDialog || !checkinDialog.showModal) {
-    // Fallback for ancient browsers — keep the Step 2 behaviour alive.
+  if (!checkinDialog) {
+    // Truly missing element — keep the Step 2 prompt() fallback alive.
     const name = prompt('打卡店名 / 地点:');
     if (name && name.trim()) {
       const cached = loadCachedGps();
@@ -195,12 +216,13 @@ export async function openCheckinDialog() {
     return;
   }
 
-  // Reset + open.
+  // Reset + open. openDialog handles iOS 14 / older Safari where
+  // showModal() is missing (class-fallback path).
   cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>正在定位…</div>';
   cdStatus.textContent = '正在定位…';
   cdStatus.className = 'cd-status';
   cdManualName.value = '';
-  checkinDialog.showModal();
+  _closeCheckinDialog = openDialog(checkinDialog);
 
   // Wire manual-entry button to current GPS context (transitions to form stage).
   let currentGps = loadCachedGps();
@@ -224,12 +246,12 @@ export async function openCheckinDialog() {
     cdStatus.textContent = `位置 (缓存) · acc ${currentGps.accuracy_m}m · 刷新中`;
     cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
     const pois = await searchNearby(currentGps.lat, currentGps.lng);
-    if (checkinDialog.open) renderPoiList(pois, currentGps);
+    if (_isDialogOpen()) renderPoiList(pois, currentGps);
   }
 
   // Get a fresh fix in the background.
   const fresh = await requestGps(10000);
-  if (!checkinDialog.open) return;
+  if (!_isDialogOpen()) return;
 
   if (!fresh) {
     if (!currentGps) {
@@ -258,7 +280,7 @@ export async function openCheckinDialog() {
   cdStatus.className = 'cd-status ready';
   cdList.innerHTML = '<div class="cd-loading"><span class="cd-spinner"></span>查询附近 POI…</div>';
   const pois = await searchNearby(fresh.lat, fresh.lng);
-  if (checkinDialog.open) renderPoiList(pois, fresh);
+  if (_isDialogOpen()) renderPoiList(pois, fresh);
 }
 
 // ---------- Module-load wiring (mirrors legacy IIFE) ----------
@@ -330,6 +352,6 @@ if (cdSubmit) {
     if (noteRaw) fields.note = noteRaw;
 
     sendCheckin(fields);
-    checkinDialog.close();
+    _closeDialog();
   });
 }
