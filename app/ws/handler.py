@@ -30,12 +30,6 @@ log = logging.getLogger("bridge")
 router = APIRouter()
 
 
-def _recorder():
-    # Lazy lookup so server.py's BRIDGE_RECORD-init runs first.
-    import server
-    return getattr(server, "_recorder", None)
-
-
 async def _ensure_agent_for_ws(ws: WebSocket):
     """Pick a default session for this WS and ensure an agent exists.
     Sets state.ws_sessions[ws] = sid. Returns the agent (or None on db error)."""
@@ -67,23 +61,6 @@ async def ws_handler(ws: WebSocket):
             await ws.close(code=4401)
             return
     await ws.accept()
-    rec = _recorder()
-    if rec:
-        rec.ws_open()
-        _orig_send = ws.send_text
-        _orig_recv = ws.receive_text
-
-        async def _rec_send(text):
-            await _orig_send(text)
-            rec.ws_frame("out", text)
-
-        async def _rec_recv():
-            text = await _orig_recv()
-            rec.ws_frame("in", text)
-            return text
-
-        ws.send_text = _rec_send  # type: ignore[method-assign]
-        ws.receive_text = _rec_recv  # type: ignore[method-assign]
     state.websockets.add(ws)
     log.info("websocket connected (total=%d)", len(state.websockets))
     try:
@@ -126,8 +103,6 @@ async def ws_handler(ws: WebSocket):
     finally:
         state.websockets.discard(ws)
         state.ws_sessions.pop(ws, None)
-        if rec:
-            rec.ws_close(None)
         log.info("websocket closed (remaining=%d)", len(state.websockets))
 
 
