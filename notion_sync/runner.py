@@ -118,30 +118,46 @@ def _pb_id_from_notion(page: dict) -> str:
     return "".join(rt.get("plain_text", "") for rt in prop.get("rich_text", []))
 
 
+# Action ID extraction table. Maps each Action class to (pb_id_getter,
+# notion_id_getter) lambdas. Replaces a long isinstance chain so adding
+# a new Action class fails loudly (test_every_action_class_in_table
+# guards) instead of silently returning (None, None).
+_ACTION_ID_GETTERS = {
+    NoChange:         (lambda a: a.pb_id,
+                       lambda a: a.notion_id),
+    PbOnlyChange:     (lambda a: a.pb_row["id"],
+                       lambda a: a.notion_id),
+    NotionOnlyChange: (lambda a: a.pb_id,
+                       lambda a: a.notion_page["id"]),
+    BothChanged:      (lambda a: a.pb_row["id"],
+                       lambda a: a.notion_page["id"]),
+    PbNew:            (lambda a: a.pb_row["id"],
+                       lambda a: None),
+    NotionNew:        (lambda a: None,
+                       lambda a: a.notion_page["id"]),
+    NotionVanished:   (lambda a: a.pb_row["id"],
+                       lambda a: a.pb_row.get("notion_id") or None),
+    PbVanished:       (lambda a: _pb_id_from_notion(a.notion_page) or None,
+                       lambda a: a.notion_page["id"]),
+}
+
+
 def _action_ids(a) -> tuple[str | None, str | None]:
-    """Extract (pb_id, notion_id) for an Action, for the freeze check.
+    """Return (pb_id, notion_id) for any Action. Returns (None, None)
+    for unknown types (the caller logs the type separately).
 
     Either side may be None if that side doesn't exist (e.g. PbNew has
     no notion_id yet; NotionVanished has a 'missing' notion_id stored
     on the PB row).
     """
-    if isinstance(a, NoChange):
-        return (a.pb_id, a.notion_id)
-    if isinstance(a, PbOnlyChange):
-        return (a.pb_row["id"], a.notion_id)
-    if isinstance(a, NotionOnlyChange):
-        return (a.pb_id, a.notion_page["id"])
-    if isinstance(a, BothChanged):
-        return (a.pb_row["id"], a.notion_page["id"])
-    if isinstance(a, PbNew):
-        return (a.pb_row["id"], None)
-    if isinstance(a, NotionNew):
-        return (None, a.notion_page["id"])
-    if isinstance(a, NotionVanished):
-        return (a.pb_row["id"], a.pb_row.get("notion_id") or None)
-    if isinstance(a, PbVanished):
-        return (_pb_id_from_notion(a.notion_page) or None, a.notion_page["id"])
-    return (None, None)
+    pair = _ACTION_ID_GETTERS.get(type(a))
+    if pair is None:
+        return (None, None)
+    pb_getter, notion_getter = pair
+    try:
+        return (pb_getter(a), notion_getter(a))
+    except (AttributeError, KeyError, TypeError):
+        return (None, None)
 
 
 def _apply_pb_to_notion(action: PbOnlyChange, *,
