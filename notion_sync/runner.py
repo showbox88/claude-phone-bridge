@@ -557,9 +557,12 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                     snapshot=notion_dict,
                 )
         except Exception as e:
+            pb_id, notion_id = _action_ids(a)
             log_event("apply_error",
                       collection=collection,
                       action=type(a).__name__,
+                      pb_id=pb_id,
+                      notion_id=notion_id,
                       error=str(e),
                       trace=traceback.format_exc()[:1000])
 
