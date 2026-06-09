@@ -76,12 +76,14 @@ def test_use_pb_writes_both_sides(monkeypatch):
     nc = MagicMock()
     nc.update_page.return_value = {"id": "n1", "last_edited_time": "2026-06-09T11:00:00.000Z"}
 
-    # Stub the transform so we don't need a full schema setup
-    from notion_sync import runner as runner_mod
-    monkeypatch.setattr(runner_mod, "pb_record_to_notion_props",
+    # Stub the transform so we don't need a full schema setup.
+    # Phase 5 Task 14: _apply_one_decision moved to notion_sync.decisions,
+    # so the patch target is the new home (not the runner shim).
+    from notion_sync import decisions as decisions_mod
+    monkeypatch.setattr(decisions_mod, "pb_record_to_notion_props",
                         lambda *a, **kw: {"Title": {"title": [{"text": {"content": "alpha"}}]}})
     # Stub icon_for to avoid PB lookup
-    monkeypatch.setattr(runner_mod, "icon_for", lambda *a, **kw: None)
+    monkeypatch.setattr(decisions_mod, "icon_for", lambda *a, **kw: None)
 
     row = _make_row("Use PB", pb_snap='{"id": "pb1", "name": "alpha"}')
 
