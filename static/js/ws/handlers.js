@@ -77,7 +77,14 @@ const HANDLERS = {
     scrollToBottom();
   },
   permission_resolved: (m) => markPermResolved(m.id, m.decision),
-  turn_done: () => { endStream(); scrollToBottom(true); },
+  turn_done: () => {
+    endStream();
+    scrollToBottom(true);
+    // Refresh drawer: server auto-titles new sessions from the first
+    // user message during the first turn. Without this, the new title
+    // doesn't appear in the session list until a page reload.
+    loadSessionList();
+  },
   system: (m) => appendSystem(m.msg || ''),
   error: (m) => appendError(m.msg || 'error'),
   pong: () => {},

@@ -4,17 +4,17 @@
 // works through brief network blips. Cache-first for /static/* assets,
 // network-first for everything else (so API + WS aren't affected).
 
-const CACHE_VERSION = 'v47';
+const CACHE_VERSION = 'v48';
 const CACHE_NAME = `phone-bridge-${CACHE_VERSION}`;
 
 const ASSETS = [
   '/',
   '/manifest.json',
   '/static/icon.svg',
-  '/static/icons.js?v=47',
+  '/static/icons.js?v=48',
   '/static/marked.min.js',
-  '/static/vendor/purify.min.js?v=47',
-  '/static/app.js?v=47',
+  '/static/vendor/purify.min.js?v=48',
+  '/static/app.js?v=48',
 
   // JS modules
   '/static/js/boot.js',
@@ -50,22 +50,22 @@ const ASSETS = [
   '/static/js/features/bell.js',
 
   // CSS
-  '/static/css/tokens.css?v=47',
-  '/static/css/base.css?v=47',
-  '/static/css/utilities.css?v=47',
-  '/static/css/layout.css?v=47',
-  '/static/css/appbar.css?v=47',
-  '/static/css/drawer.css?v=47',
-  '/static/css/messages.css?v=47',
-  '/static/css/tools-perms.css?v=47',
-  '/static/css/composer.css?v=47',
-  '/static/css/picker.css?v=47',
-  '/static/css/dialogs/checkin.css?v=47',
-  '/static/css/dialogs/usage.css?v=47',
-  '/static/css/dialogs/sync.css?v=47',
-  '/static/css/dialogs/weekly.css?v=47',
-  '/static/css/dialogs/cwd.css?v=47',
-  '/static/css/dialogs/bell.css?v=47',
+  '/static/css/tokens.css?v=48',
+  '/static/css/base.css?v=48',
+  '/static/css/utilities.css?v=48',
+  '/static/css/layout.css?v=48',
+  '/static/css/appbar.css?v=48',
+  '/static/css/drawer.css?v=48',
+  '/static/css/messages.css?v=48',
+  '/static/css/tools-perms.css?v=48',
+  '/static/css/composer.css?v=48',
+  '/static/css/picker.css?v=48',
+  '/static/css/dialogs/checkin.css?v=48',
+  '/static/css/dialogs/usage.css?v=48',
+  '/static/css/dialogs/sync.css?v=48',
+  '/static/css/dialogs/weekly.css?v=48',
+  '/static/css/dialogs/cwd.css?v=48',
+  '/static/css/dialogs/bell.css?v=48',
 ];
 
 self.addEventListener('install', (event) => {
