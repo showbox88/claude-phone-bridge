@@ -37,6 +37,7 @@ import { appendPermissionCard, markPermResolved } from '../render/perm.js';
 import { hideTyping } from '../render/typing.js';
 import { scrollToBottom } from '../render/scroll.js';
 import { setHeader, setMode, setModel, setAutoApprove } from '../session/header.js';
+import { loadSessionList } from '../session/list.js';
 
 function endStream() {
   const bubble = get('currentAssistantBubble');
@@ -90,12 +91,13 @@ const HANDLERS = {
       if (Array.isArray(m.session.messages)) renderHistory(m.session.messages);
     }
   },
-  session_deleted: () => {},
+  session_deleted: () => { loadSessionList(); },
   session_renamed: (m) => {
     if (m.id === get('currentSessionId')) {
       set('currentSessionTitle', m.title || '');
       setHeader(m.title || '', null);
     }
+    loadSessionList();
   },
   // Legacy had this; the plan-template missed it. Ported verbatim.
   session_mode_changed: (m) => {
@@ -105,7 +107,7 @@ const HANDLERS = {
     if (m.id === get('currentSessionId')) setModel(m.model || '');
   },
   auto_approve_changed: (m) => setAutoApprove(!!m.value),
-  sessions_changed: () => {},
+  sessions_changed: () => { loadSessionList(); },
 };
 
 export function dispatch(msg) {
