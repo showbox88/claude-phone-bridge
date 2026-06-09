@@ -57,7 +57,7 @@ from notion_sync.logger import log_event
 from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.transform import (
-    build_relation_lookup,
+    LazyRelationLookup,
     collection_field_types,
     notion_page_to_pb_dict,
     pb_record_to_notion_props,
@@ -437,13 +437,13 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient,
     notion_db = nc.retrieve_database(notion_db_id)
     notion_schema = notion_db.get("properties", {})
 
-    # Build PB→Notion relation lookup once per sync_collection call. Covers
-    # every currently-enabled sync target. Fresh rows added DURING this
-    # pass don't appear in the lookup, but they'll be linkable on the next
-    # pass — acceptable for initial relation backfill.
-    all_targets = pb.list_records("sync_config", filter="enabled=true", sort="")
-    target_names = [t["collection"] for t in all_targets]
-    relation_lookup = build_relation_lookup(pb, target_names)
+    # Build PB→Notion relation lookup once per sync_collection call.
+    # Phase 5 Task 9: lazy — only the relation targets actually referenced
+    # by `collection`'s relation_targets are fetched, and only on first use.
+    # Fresh rows added DURING this pass don't appear in the lookup, but
+    # they'll be linkable on the next pass — acceptable for initial
+    # relation backfill.
+    relation_lookup = LazyRelationLookup(pb)
     relation_targets = relation_target_collections(pb, collection)
 
     # Phase 0: apply user-decided Sync Activity rows. After this, applied
