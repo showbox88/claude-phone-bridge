@@ -345,10 +345,15 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
         notion_snap = _load_snap("notion_snapshot")
         if not pb_id or not notion_id or not notion_snap:
             raise RuntimeError("Use Notion requires both IDs + notion_snapshot")
-        # Refresh the page's last_edited_time so subsequent runs see NoChange.
+        # PATCH Notion's last_synced_at FIRST so its last_edited_time
+        # advances. Reading retrieve_page() without patching first leaves
+        # PB with the old timestamp; the next sync sees PB ahead of Notion
+        # and flags a false conflict (Phase 5 Task 3 fix).
         try:
-            current_page = nc.retrieve_page(notion_id)
-            notion_last_edited = current_page.get("last_edited_time", "")
+            page = nc.update_page(notion_id, properties={
+                "last_synced_at": {"date": {"start": now_iso_date()}},
+            })
+            notion_last_edited = page.get("last_edited_time", "")
         except Exception:
             notion_last_edited = ""
         pb.update_record(collection, pb_id, notion_snap | {
