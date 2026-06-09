@@ -35,6 +35,8 @@ import {
   sessionSearch, sessionSearchClear,
   // source picker
   spAddBtn, spCancel, spSave, spName, spUrl, sourceBtn, sourceName,
+  // misc
+  appVersion,
 } from './dom.js';
 
 import { apiUrl } from './api.js';
@@ -352,9 +354,21 @@ function registerServiceWorker() {
 //   - bell polling (legacy 2653-2654) used to fire unconditionally at IIFE
 //     end. We defer it to init() so it only kicks in after a source is
 //     selected (otherwise apiUrl() has no base and the polls all fail).
+// Show the resource-cache version (`?v=N`) in the app bar so a refresh-state
+// glance can confirm whether the latest assets are loaded. Module entry is
+// loaded via <script type="module" src="/static/app.js?v=N">; document.currentScript
+// is null inside modules, so we querySelector the tag explicitly.
+function _displayVersion() {
+  if (!appVersion) return;
+  const src = document.querySelector('script[src*="app.js?v="]')?.src || '';
+  const m = src.match(/[?&]v=(\d+)/);
+  appVersion.textContent = m ? 'v' + m[1] : '';
+}
+
 async function init() {
   wireEvents();
   registerServiceWorker();
+  _displayVersion();
 
   const id = getCurrentSourceId();
   const sources = loadSources();
