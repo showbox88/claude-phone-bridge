@@ -37,7 +37,7 @@
 | 0 地基 | ✅ 已合并 | `refactor/phase-0-foundation` | 2026-06-06 | `df169fe` | CHANGELOG §Phase 0 |
 | 1 PB 统一 | ✅ 已合并 | `refactor/phase-1-pb-client` | 2026-06-07 | `bda39f4` | CHANGELOG §Phase 1 |
 | 2 拆包 | ✅ 已合并 | `refactor/phase-2-app-package` | 2026-06-07 | `9f0f9ff` | CHANGELOG §Phase 2 |
-| 3 Session 多实例 | 🚧 进行中 | `refactor/phase-3-session-manager` | — | — | — |
+| 3 Session 多实例 | ✅ 已合并 | `refactor/phase-3-session-manager` | 2026-06-08 | `cf9664c` | CHANGELOG §Phase 3 |
 | 4 前端 | ⏳ 待开始 | `refactor/phase-4-frontend-modules` | — | — | — |
 | 5 sync | ⏳ 待开始 | `refactor/phase-5-sync-runner` | — | — | — |
 | 6 收尾 | ⏳ 待开始 | `refactor/phase-6-polish` | — | — | — |
@@ -46,9 +46,9 @@
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase 3 · Session 多实例化（拆 `state.client` 全局单例为 per-session client）
+👉 **下一步执行**：Phase 4 · 前端模块化（`static/app.js` ~5500 行 → 25+ ES Modules，CSS 拆 12 文件，DOMPurify XSS 防护，流式渲染 CPU 优化）
 
-Phase 2 已 merge 到 main（`9f0f9ff`），staging soak 通过。
+Phase 3 已 merge 到 main（`cf9664c`），3 小时 staging soak 通过。
 下次开新窗口直接说"继续重构路线图"或贴这一行即可。
 
 ---
