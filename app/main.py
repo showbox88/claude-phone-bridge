@@ -12,9 +12,7 @@ Assembled at import time:
 2. FastAPI `app` with `lifespan` that resolves cwd_root from
    settings.default_cwd BEFORE anything else, then starts push, db,
    PB token loop, weekly-report scheduler, default session.
-3. The Phase 2 baseline recorder (BRIDGE_RECORD=1 gated). Removed in
-   Task 16.
-4. CORS, auth middleware, auth pages, 10 API routers, ws handler,
+3. CORS, auth middleware, auth pages, 10 API routers, ws handler,
    static-file mounts.
 """
 from __future__ import annotations
@@ -95,6 +93,7 @@ async def _pb_refresh_loop() -> None:
 # Side-effect import: builds PB_MCP_SERVER at module load (safe-guarded).
 from app.agent.options import PB_MCP_SERVER  # noqa: E402, F401
 from app.agent.session import new_session, open_session  # noqa: E402
+from app.agent.manager import manager  # noqa: E402
 from app.reporting.weekly_report import _weekly_report_posted  # noqa: E402
 
 
@@ -104,7 +103,6 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     # app/state.py uses Path.cwd().resolve() as the dataclass default to
     # avoid importing app.settings at module-load time; lifespan corrects it.
     state.cwd_root = Path(settings.default_cwd or os.getcwd()).resolve()
-    state.cwd = state.cwd_root
     push.init()
     db.init(state.cwd_root / ".bridge_data" / "bridge.db")
     uploads_dir()
@@ -123,7 +121,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
         else:
             await new_session()
     except Exception as e:
-        log.exception("initial Claude session failed: %s", e)
+        log.exception("initial Claude session warm-up failed: %s", e)
     yield
     if pb_task is not None:
         pb_task.cancel()
@@ -132,9 +130,7 @@ async def lifespan(app: FastAPI):  # noqa: ARG001
     report_task.cancel()
     with contextlib.suppress(asyncio.CancelledError, Exception):
         await report_task
-    if state.client is not None:
-        with contextlib.suppress(Exception):
-            await state.client.disconnect()
+    await manager.shutdown()
 
 
 app = FastAPI(lifespan=lifespan)

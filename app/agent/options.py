@@ -1,12 +1,12 @@
 """Claude Agent SDK options builder.
 
-`make_options(resume_sdk_id)` produces the `ClaudeAgentOptions` passed to
+`make_options(agent)` produces the `ClaudeAgentOptions` passed to
 `ClaudeSDKClient(options=...)` per session. It assembles:
-- cwd from `state.cwd`
+- cwd from `agent.cwd`
 - the permission callback (`can_use_tool`)
 - mode-specific system prompt + allowed tools
 - PocketBase MCP server registration (if env-configured)
-- runtime timezone note (if `state.client_tz` is set)
+- runtime timezone note (if `agent.client_tz` is set)
 - model override / resume id
 
 `PB_MCP_SERVER` is built once at module import; if init fails the service
@@ -22,7 +22,6 @@ from claude_agent_sdk import ClaudeAgentOptions
 import pb_tools
 
 from app.agent.permission import AUTO_ALLOW, CHAT_TOOLS, can_use_tool
-from app.state import state
 
 log = logging.getLogger("bridge")
 
@@ -66,22 +65,21 @@ except Exception as e:
     log.exception("PocketBase MCP tools failed to init, continuing without them: %s", e)
 
 
-def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
+def make_options(agent) -> ClaudeAgentOptions:
+    """Build SDK options from a ClaudeAgent. Replaces the old
+    `make_options(resume_sdk_id)` signature; reads cwd/mode/model/
+    client_tz/sdk_session_id from the agent instead of global state."""
     kwargs: dict[str, Any] = dict(
-        cwd=str(state.cwd),
+        cwd=str(agent.cwd),
         can_use_tool=can_use_tool,
     )
-    if state.mode == "chat":
+    if agent.mode == "chat":
         kwargs["system_prompt"] = CHAT_SYSTEM_PROMPT
         kwargs["allowed_tools"] = list(CHAT_TOOLS)
-    else:  # code mode
+    else:
         kwargs["system_prompt"] = {"type": "preset", "preset": "claude_code"}
         kwargs["allowed_tools"] = list(AUTO_ALLOW)
 
-    # PocketBase tools: register the in-process MCP server and pre-approve the
-    # read/safe-write tools (matching the old auto-allowed localhost curl path).
-    # Destructive tools stay out of allowed_tools, so they hit can_use_tool and
-    # the phone permission prompt.
     if PB_MCP_SERVER:
         kwargs["mcp_servers"] = {pb_tools.SERVER_NAME: PB_MCP_SERVER}
         kwargs["allowed_tools"] = kwargs["allowed_tools"] + pb_tools.SAFE_TOOL_NAMES
@@ -91,9 +89,9 @@ def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
             kwargs["system_prompt"] = {**kwargs["system_prompt"],
                                        "append": pb_tools.PROMPT_HINT}
 
-    if state.client_tz:
+    if agent.client_tz:
         tz_note = (
-            f"\n\n[runtime] Current user timezone: {state.client_tz}. "
+            f"\n\n[runtime] Current user timezone: {agent.client_tz}. "
             f"When a user says relative times like '明天3点' or 'tomorrow 6pm', "
             f"resolve them per the rules in SMARTNOTE_PROMPT.md (Timezone section)."
         )
@@ -106,8 +104,8 @@ def make_options(resume_sdk_id: str | None = None) -> ClaudeAgentOptions:
                 "append": (sp.get("append", "") or "") + tz_note,
             }
 
-    if state.model:
-        kwargs["model"] = state.model
-    if resume_sdk_id:
-        kwargs["resume"] = resume_sdk_id
+    if agent.model:
+        kwargs["model"] = agent.model
+    if agent.sdk_session_id:
+        kwargs["resume"] = agent.sdk_session_id
     return ClaudeAgentOptions(**kwargs)

@@ -1,7 +1,13 @@
 """Sync wrapper around Notion REST API.
 
-Stdlib urllib only. Rate-limits to 2 req/s globally so we stay under
-Notion's 3 req/s burst limit.
+Stdlib urllib only.
+
+Rate-limiting: token bucket (3 capacity, refill 3/sec) — allows short
+bursts up to capacity then steady 3 req/s. Phase 3 upgrade from the
+previous fixed 0.5s sleep.
+
+Retry: HTTP 429 honors Retry-After header (capped at 30s); 5xx
+exponential backoff 0.1/0.2/0.4/0.8s × 4 retries; other 4xx fail fast.
 """
 from __future__ import annotations
 
@@ -15,23 +21,57 @@ from typing import Any
 
 NOTION_API_VERSION = "2022-06-28"
 
+_BUCKET_CAPACITY = 3
+_BUCKET_REFILL_PER_SEC = 3.0
+_MAX_RETRIES = 4
+_BACKOFF_BASE_SEC = 0.1
+_RETRY_AFTER_CAP_SEC = 30.0
+
+
+class _TokenBucket:
+    """Thread-safe token bucket."""
+    def __init__(self, capacity: int, refill_per_sec: float):
+        self.capacity = capacity
+        self.refill_per_sec = refill_per_sec
+        self.tokens = float(capacity)
+        self.last_refill = time.monotonic()
+        self.lock = threading.Lock()
+
+    def take(self) -> None:
+        while True:
+            with self.lock:
+                now = time.monotonic()
+                elapsed = now - self.last_refill
+                self.tokens = min(self.capacity,
+                                  self.tokens + elapsed * self.refill_per_sec)
+                self.last_refill = now
+                if self.tokens >= 1.0:
+                    self.tokens -= 1.0
+                    return
+                deficit = 1.0 - self.tokens
+                wait = deficit / self.refill_per_sec
+            time.sleep(wait)
+
 
 class NotionClient:
     def __init__(self, token: str | None = None) -> None:
         self.token = token or os.environ["NOTION_TOKEN"]
-        self._rate_lock = threading.Lock()
-        self._last_call_at: float = 0.0
+        self._bucket = _TokenBucket(_BUCKET_CAPACITY, _BUCKET_REFILL_PER_SEC)
 
-    def _throttle(self) -> None:
-        with self._rate_lock:
-            now = time.monotonic()
-            wait = 0.5 - (now - self._last_call_at)
-            if wait > 0:
-                time.sleep(wait)
-            self._last_call_at = time.monotonic()
+    def _retry_after_sec(self, headers) -> float:
+        raw = ""
+        try:
+            raw = headers.get("Retry-After") if hasattr(headers, "get") else ""
+        except Exception:
+            raw = ""
+        if not raw:
+            return 0.0
+        try:
+            return min(_RETRY_AFTER_CAP_SEC, max(0.0, float(raw)))
+        except (TypeError, ValueError):
+            return 0.0
 
     def _http(self, method: str, path: str, body: Any | None = None) -> Any:
-        self._throttle()
         url = f"https://api.notion.com/v1{path}"
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -40,13 +80,26 @@ class NotionClient:
         }
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=30.0) as r:
-                raw = r.read().decode("utf-8")
-                return json.loads(raw) if raw else None
-        except urllib.error.HTTPError as e:
-            raw = e.read().decode("utf-8", "replace")
-            raise RuntimeError(f"Notion {method} {path}: {e.code} {raw[:500]}") from None
+
+        for attempt in range(_MAX_RETRIES + 1):
+            self._bucket.take()
+            try:
+                with urllib.request.urlopen(req, timeout=30.0) as r:
+                    raw = r.read().decode("utf-8")
+                    return json.loads(raw) if raw else None
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and attempt < _MAX_RETRIES:
+                    wait = self._retry_after_sec(e.headers) or \
+                           (_BACKOFF_BASE_SEC * (2 ** attempt))
+                    time.sleep(wait)
+                    continue
+                if 500 <= e.code < 600 and attempt < _MAX_RETRIES:
+                    time.sleep(_BACKOFF_BASE_SEC * (2 ** attempt))
+                    continue
+                raw = e.read().decode("utf-8", "replace")
+                raise RuntimeError(
+                    f"Notion {method} {path}: {e.code} {raw[:500]}") from None
+        raise RuntimeError(f"Notion {method} {path}: retries exhausted")
 
     def query_database(self, database_id: str, *,
                        filter_: dict | None = None,

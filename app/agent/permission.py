@@ -23,9 +23,10 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 
 import push
 
+from app.agent.agent import current_agent
 from app.settings import settings
 from app.state import state
-from app.ws.broadcast import broadcast
+from app.ws.broadcast import broadcast, broadcast_to_agent
 
 log = logging.getLogger("bridge")
 
@@ -54,6 +55,7 @@ def summarize_input(tool_input: dict | None) -> str:
 
 
 async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG001
+    agent = current_agent.get()
     # Fast-path: 打卡 Bash curl to local PocketBase — no phone confirmation needed.
     # Match strictly on localhost:8090 / 127.0.0.1:8090 to keep blast radius tight.
     if tool_name == "Bash" and settings.pocketbase_url:
@@ -64,27 +66,38 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
     if tool_name in AUTO_ALLOW:
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
-    # YOLO toggle: skip the phone prompt entirely. Still surface the
-    # tool call in the chat as a system message so the user has audit
+    # state.auto_approve stays GLOBAL (process-wide YOLO toggle). Still surface
+    # the tool call in the chat as a system message so the user has audit
     # trail of what got auto-run while they were away.
     if state.auto_approve:
-        await broadcast({
-            "type": "system",
-            "msg": f"🚀 auto-approved {tool_name}",
-        })
+        if agent is not None:
+            await broadcast_to_agent(agent,
+                {"type": "system", "msg": f"🚀 auto-approved {tool_name}"})
+        else:
+            await broadcast({"type": "system",
+                             "msg": f"🚀 auto-approved {tool_name}"})
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
     cb_id = secrets.token_urlsafe(8)
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     state.pending[cb_id] = fut
-    state.pending_meta[cb_id] = {"tool": tool_name, "input": tool_input}
+    state.pending_meta[cb_id] = {
+        "tool": tool_name, "input": tool_input,
+        "session_id": agent.session_id if agent else None,
+    }
 
-    await broadcast({
+    perm_msg = {
         "type": "permission_request",
         "id": cb_id,
         "tool": tool_name,
         "input": tool_input,
-    })
+        "session_id": agent.session_id if agent else None,
+    }
+    if agent is not None:
+        await broadcast_to_agent(agent, perm_msg)
+    else:
+        await broadcast(perm_msg)
+
     await asyncio.to_thread(
         push.send_to_all,
         f"🔧 Claude wants to run {tool_name}",
@@ -95,9 +108,18 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
     try:
         decision = await asyncio.wait_for(fut, timeout=600)
     except asyncio.TimeoutError:
-        await broadcast({"type": "system", "msg": f"{tool_name} timed out, denied"})
-        await broadcast({"type": "permission_resolved", "id": cb_id, "decision": "timeout"})
-        return PermissionResultDeny(behavior="deny", message="user did not respond in time")
+        if agent is not None:
+            await broadcast_to_agent(agent,
+                {"type": "system", "msg": f"{tool_name} timed out, denied"})
+            await broadcast_to_agent(agent,
+                {"type": "permission_resolved", "id": cb_id, "decision": "timeout"})
+        else:
+            await broadcast({"type": "system",
+                             "msg": f"{tool_name} timed out, denied"})
+            await broadcast({"type": "permission_resolved",
+                             "id": cb_id, "decision": "timeout"})
+        return PermissionResultDeny(behavior="deny",
+                                    message="user did not respond in time")
     finally:
         state.pending.pop(cb_id, None)
         state.pending_meta.pop(cb_id, None)
