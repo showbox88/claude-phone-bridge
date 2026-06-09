@@ -35,6 +35,7 @@ from app.paths import DATA_DIR, SYNC_ALERT_STATE  # noqa: E402
 from app.settings import settings  # noqa: E402
 
 from notion_sync.activity import (
+    frozen_pairs_for_all,
     frozen_pairs_for_collection,
     pending_action_exists,
     write_conflict,
@@ -404,7 +405,16 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
     raise RuntimeError(f"decision not auto-appliable: {decision!r}")
 
 
-def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
+def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient,
+                    *, frozen_pairs: tuple[set[str], set[str]] | None = None
+                    ) -> dict:
+    """Sync one collection.
+
+    frozen_pairs: pre-computed (frozen_pb_ids, frozen_notion_ids) for
+    this collection from the batched main()-level fetch. If None,
+    falls back to the legacy single-collection query — keeps external
+    callers like scripts/reconcile_initial.py working unchanged.
+    """
     collection = cfg_row["collection"]
     notion_db_id = cfg_row["notion_db_id"]
     overrides = cfg_row.get("field_map_overrides") or {}
@@ -459,9 +469,18 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     # matter what category it falls into. Prevents subsequent edits
     # from cascading into NotionOnlyChange / PbOnlyChange / etc and
     # silently overwriting the conflicted side before the user decides.
-    frozen_pb_ids, frozen_notion_ids = frozen_pairs_for_collection(
-        nc, collection=collection,
-    )
+    #
+    # main() pre-fetches frozen pairs for all enabled collections in
+    # one group-by query and passes the per-collection slice here. When
+    # called from outside main() (e.g. reconcile_initial.py), fall back
+    # to the legacy single-collection query so external callers don't
+    # need to know about the batching.
+    if frozen_pairs is None:
+        frozen_pb_ids, frozen_notion_ids = frozen_pairs_for_collection(
+            nc, collection=collection,
+        )
+    else:
+        frozen_pb_ids, frozen_notion_ids = frozen_pairs
 
     # Counts are tallied AFTER the freeze check so frozen rows don't
     # inflate applied/conflict/delete counts in the log.
@@ -608,10 +627,23 @@ def main() -> int:
             log_event("run_aborted", reason=f"no sync_config for {args.only}")
             return 1
 
+    # Pre-fetch frozen pairs for every enabled collection in ONE Notion
+    # query — replaces N sequential per-collection queries inside the
+    # sync_collection loop. At Task 0 baseline (10 enabled collections)
+    # this saves 9 round-trips per run. The mapping is keyed by
+    # collection name; sync_collection accepts the per-collection slice
+    # via its frozen_pairs kwarg.
+    frozen_all = frozen_pairs_for_all(
+        nc, collections=[t["collection"] for t in targets],
+    )
+
     overall: dict[str, int] = {"applied": 0, "conflicts": 0, "deletes": 0}
     for t in targets:
         try:
-            result = sync_collection(t, pb, nc)
+            result = sync_collection(
+                t, pb, nc,
+                frozen_pairs=frozen_all.get(t["collection"], (set(), set())),
+            )
             for k in ("applied", "conflicts", "deletes"):
                 overall[k] += result.get(k, 0)
             pb.update_record("sync_config", t["id"], {

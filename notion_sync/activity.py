@@ -157,3 +157,51 @@ def frozen_pairs_for_collection(client, *, collection: str
         if nid:
             frozen_notion.add(nid)
     return frozen_pb, frozen_notion
+
+
+def frozen_pairs_for_all(client, *, collections: list[str]
+                         ) -> dict[str, tuple[set[str], set[str]]]:
+    """One-shot group-by version of frozen_pairs_for_collection.
+
+    Returns {collection: (frozen_pb_ids, frozen_notion_ids)} for every
+    name in `collections`. Makes a single Notion query filtered by
+    'collection IN [...]' AND decision=Pending AND op IN (Conflict,
+    Delete?), then groups results in Python.
+
+    Replaces N sequential per-collection queries with one. Same freeze
+    semantics as the legacy single-collection version: rows with a
+    Pending Conflict/Delete? decision are off-limits until the user
+    picks a decision.
+
+    Collections in the input list that have no frozen rows still appear
+    in the result map with empty sets — callers can do a plain
+    `result[collection]` without KeyError concerns.
+    """
+    result: dict[str, tuple[set[str], set[str]]] = {
+        c: (set(), set()) for c in collections
+    }
+    if not collections:
+        return result
+    db_id = os.environ["NOTION_SYNC_ACTIVITY_DB_ID"]
+    filt = {"and": [
+        {"or": [{"property": "collection", "select": {"equals": c}}
+                for c in collections]},
+        {"property": "decision", "select": {"equals": "Pending"}},
+        {"or": [
+            {"property": "op", "select": {"equals": "Conflict"}},
+            {"property": "op", "select": {"equals": "Delete?"}},
+        ]},
+    ]}
+    rows = client.query_database(db_id, filter_=filt)
+    for r in rows:
+        p = r.get("properties", {})
+        c = (p.get("collection", {}).get("select") or {}).get("name", "")
+        if c not in result:
+            continue
+        pid = "".join(rt.get("plain_text", "") for rt in p.get("pb_id", {}).get("rich_text", []))
+        nid = "".join(rt.get("plain_text", "") for rt in p.get("notion_id", {}).get("rich_text", []))
+        if pid:
+            result[c][0].add(pid)
+        if nid:
+            result[c][1].add(nid)
+    return result
