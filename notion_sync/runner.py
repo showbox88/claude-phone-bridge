@@ -84,10 +84,18 @@ def now_iso_datetime() -> str:
 
 def should_run_now(sync_global: dict, *, now_utc: datetime | None = None) -> bool:
     """True iff the local hour in sync_global.timezone matches EITHER
-    `sync_hour_local` or `sync_hour_local_2` AND `paused` is False.
+    `sync_hour_local` or `sync_hour_local_2` AND `paused` is False AND
+    ≥23h have elapsed since `last_successful_run_at`.
 
-    Returns False if paused, bad timezone, or off-hour. Tolerant of
-    missing config (defaults UTC, hour=3, no second slot).
+    The ≥23h gate prevents double-run within the same wall-clock day
+    (e.g. quick service restart) and tolerates clock drift across hour
+    boundaries (NTP can move local time by several seconds). A
+    missing/malformed `last_successful_run_at` is treated as "no last
+    run" and does not block.
+
+    Returns False if paused, bad timezone, off-hour, or within 23h of
+    the last successful run. Tolerant of missing config (defaults UTC,
+    hour=3, no second slot).
     """
     if sync_global.get("paused"):
         return False
@@ -111,7 +119,20 @@ def should_run_now(sync_global: dict, *, now_utc: datetime | None = None) -> boo
     except Exception:
         log_event("bad_timezone", configured=tz_name)
         return False
-    return local.hour in target_hours
+    if local.hour not in target_hours:
+        return False
+    last_run = sync_global.get("last_successful_run_at")
+    if last_run:
+        try:
+            # PB datetime fields use ISO 8601 (possibly with trailing 'Z').
+            last_dt = datetime.fromisoformat(str(last_run).replace("Z", "+00:00"))
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=timezone.utc)
+            if now - last_dt < timedelta(hours=23):
+                return False
+        except (ValueError, AttributeError, TypeError):
+            pass  # malformed timestamp — treat as "no last run" and proceed
+    return True
 
 
 def _pb_id_from_notion(page: dict) -> str:
@@ -638,6 +659,7 @@ def main() -> int:
     )
 
     overall: dict[str, int] = {"applied": 0, "conflicts": 0, "deletes": 0}
+    any_collection_error = False
     for t in targets:
         try:
             result = sync_collection(
@@ -657,15 +679,23 @@ def main() -> int:
                       collection=t["collection"],
                       **result)
         except Exception as e:
+            any_collection_error = True
             log_event("collection_error",
                       collection=t["collection"],
                       error=str(e),
                       trace=traceback.format_exc()[:2000])
 
     if sync_global.get("id"):
-        pb.update_record("sync_global", sync_global["id"], {
-            "last_run_at": now_iso_datetime(),
-        })
+        update_fields: dict = {"last_run_at": now_iso_datetime()}
+        # Mark this run as successful so the ≥23h gate can advance.
+        # Only stamp on the happy path — a per-collection failure means
+        # we want the next hourly tick (same hour) to retry.
+        if not any_collection_error:
+            update_fields["last_successful_run_at"] = now_iso_datetime()
+        try:
+            pb.update_record("sync_global", sync_global["id"], update_fields)
+        except Exception as e:
+            log_event("last_run_update_failed", error=str(e))
 
     # Date-based Notion linkages (Day↔Stops, Day↔Trip, Stop↔Trip).
     # Linkages derive from Notion-side dates only — independent of PB
