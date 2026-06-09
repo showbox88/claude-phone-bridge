@@ -622,6 +622,9 @@ def main() -> int:
                 days_db_id=d["notion_db_id"],
                 stops_db_id=s["notion_db_id"],
                 trips_db_id=t["notion_db_id"],
+                days_overrides=d.get("field_map_overrides") or {},
+                stops_overrides=s.get("field_map_overrides") or {},
+                trips_overrides=t.get("field_map_overrides") or {},
             )
             overall.update(linkage_counts)
             log_event("linkages_updated", **linkage_counts)

@@ -132,3 +132,81 @@ def test_stop_with_no_date_is_skipped():
         days_db_id="days-db", stops_db_id="stops-db", trips_db_id="trips-db")
     assert counts["stops_patched"] == 0
     assert counts["no_change_stops"] == 0   # skipped, not counted
+
+
+# --- Phase 5 Task 4: column-name overrides ---------------------------------
+
+def test_default_columns_when_no_overrides():
+    """Without overrides, uses legacy column names 'Date', 'Day', 'Trip',
+    'Dates'. Validated end-to-end via a real patch."""
+    days  = [_page("day-A", date="2026-06-04")]
+    stops = [_page("stop-1", date="2026-06-04", day_rel="")]
+    nc = FakeNotion({"days-db": days, "stops-db": stops, "trips-db": []})
+    counts = linkage.update_date_linkages(nc,
+        days_db_id="days-db", stops_db_id="stops-db", trips_db_id="trips-db")
+    assert counts["stops_patched"] == 1
+    # Patch key is the legacy 'Day' name
+    assert "Day" in nc.patches[0][1]
+
+
+def test_overrides_rename_relation_column_in_patch():
+    """When stops_overrides maps 'day' → 'DayLink', linkage should both
+    read from properties['DayLink'] and write to patch['DayLink'] — never
+    touch the literal 'Day' name."""
+    days = [_page("day-A", date="2026-06-04")]
+    # Stop's existing relation lives under the renamed column.
+    stops = [{
+        "id": "stop-1",
+        "properties": {
+            "Date": {"date": {"start": "2026-06-04"}},
+            "DayLink": {"relation": []},
+        },
+    }]
+    nc = FakeNotion({"days-db": days, "stops-db": stops, "trips-db": []})
+    counts = linkage.update_date_linkages(nc,
+        days_db_id="days-db", stops_db_id="stops-db", trips_db_id="trips-db",
+        stops_overrides={"day": "DayLink"})
+    assert counts["stops_patched"] == 1
+    patch = nc.patches[0][1]
+    assert "DayLink" in patch
+    assert "Day" not in patch  # legacy name must NOT appear in the patch
+    assert patch["DayLink"]["relation"] == [{"id": "day-A"}]
+
+
+def test_overrides_rename_date_column_on_days_and_stops():
+    """Renaming the date column on both days and stops should drive the
+    join on the new column. Tests _date_scalar uses the resolved name."""
+    days = [{
+        "id": "day-A",
+        "properties": {"Departure": {"date": {"start": "2026-06-04"}}},
+    }]
+    stops = [{
+        "id": "stop-1",
+        "properties": {
+            "Departure": {"date": {"start": "2026-06-04"}},
+            "Day": {"relation": []},
+        },
+    }]
+    nc = FakeNotion({"days-db": days, "stops-db": stops, "trips-db": []})
+    counts = linkage.update_date_linkages(nc,
+        days_db_id="days-db", stops_db_id="stops-db", trips_db_id="trips-db",
+        days_overrides={"date": "Departure"},
+        stops_overrides={"date": "Departure"})
+    # The join succeeds → stop gets linked to day-A.
+    assert counts["stops_patched"] == 1
+    assert nc.patches[0][1]["Day"]["relation"] == [{"id": "day-A"}]
+
+
+def test_partial_override_falls_back_to_default():
+    """If overrides supplies only one field, the others must still use
+    their legacy defaults (no KeyError, no silent wrong column)."""
+    days = [_page("day-A", date="2026-06-04")]
+    stops = [_page("stop-1", date="2026-06-04", day_rel="")]
+    nc = FakeNotion({"days-db": days, "stops-db": stops, "trips-db": []})
+    # Override only 'trip' (unused here) on stops — date/day must still
+    # resolve to 'Date'/'Day'.
+    counts = linkage.update_date_linkages(nc,
+        days_db_id="days-db", stops_db_id="stops-db", trips_db_id="trips-db",
+        stops_overrides={"trip": "TripLink"})
+    assert counts["stops_patched"] == 1
+    assert "Day" in nc.patches[0][1]   # legacy default still works
