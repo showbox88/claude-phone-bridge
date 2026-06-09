@@ -5,6 +5,68 @@
 
 ---
 
+## 2026-06-08 — Phase 3 · Session 多实例化 + Notion 鲁棒性
+
+**Branch:** `refactor/phase-3-session-manager` (20 commits, `435f083..a90c878`)
+**实际工时:** 约 4 小时（含调研、TDD 写测、subagent-driven execution、3 次重录 baseline、deploy + soak verify）
+
+### 落地的事
+- **`app/agent/agent.py` 新文件**（45 行）— `ClaudeAgent` dataclass 封装 per-session 状态（`client / cwd / mode / model / sdk_session_id / turn_lock / current_turn_task / client_tz`）+ `current_agent: ContextVar` 用于 SDK permission callback 找到正在跑 turn 的 agent，不破坏 SDK 调用接口
+- **`app/agent/manager.py` 新文件**（约 100 行）— `SessionManager` 维护 `Dict[sid, ClaudeAgent]`：
+  - `get_or_create(sid, cwd, mode, model, sdk_session_id)`：懒构造，第一次访问时连 SDK；slot-reserve 在 await 前防止 race（两个并发 get_or_create 同 sid 不会泄漏 client）；失败时回滚 slot
+  - `recreate(sid, ...)`：拿 `agent.turn_lock` 锁后才 disconnect → 重建 → reconnect；in-flight turn 不会被切 model/cwd 撕裂
+  - `destroy(sid)`：取消 current_turn_task（BaseException-suppressed wait）→ disconnect → 移出 dict
+  - `shutdown()`：lifespan 退出时清所有 agents
+- **`app/state.py` 大幅瘦身**（51 → 33 行）— 删 9 个 per-session 字段：`client / cwd / mode / model / sdk_session_id / turn_lock / current_turn_task / client_tz / session_id`，全部迁到 `ClaudeAgent`。新增 `ws_sessions: dict[WebSocket, str]` 跟踪 WS→session 绑定。保留进程级字段：`cwd_root / websockets / pending / pending_meta / auto_approve`
+- **`app/ws/broadcast.py`**（23 → 47 行）— 加 `broadcast_to_agent(agent, msg)`：只 fan-out 给 `state.ws_sessions[ws] == agent.session_id` 的 WS。`broadcast()` 仍负责进程级事件（session_deleted / auto_approve_changed）
+- **`app/ws/handler.py` 重写**（216 → 246 行）— 每个 WS 绑 sid（accept 时 `_ensure_agent_for_ws` + `state.ws_sessions[ws] = sid`）；`user_message` 路由到 `_agent_for_ws(ws)` 然后 `run_user_turn(agent, ...)`；`set_model / cwd` 走 `manager.recreate(agent.session_id, ...)` 只重建本 session 的 client；`delete_session` 走 `manager.destroy(sid)` + 重绑被影响的 WS 到 `db.latest_session_id()`；`permission_response` 走 `pending_meta[cb_id].session_id` 路由 broadcast
+- **`app/agent/options.py:make_options(agent)`** — 签名从 `(resume_sdk_id)` 改成 `(agent)`，读 `agent.cwd / mode / model / client_tz / sdk_session_id`；删 `from app.state import state`
+- **`app/agent/turn.py:run_user_turn(agent, ...)`** — 加 agent 参数，函数头设 `current_agent.set(agent)`，每个 `broadcast(...)` 改 `broadcast_to_agent(agent, ...)`；`_save_msg(agent, role, content)` 改签名取代 `state.session_id`
+- **`app/agent/permission.py:can_use_tool`** — `current_agent.get()` 拿 agent，permission_request 携带 `session_id`，broadcast 走 `broadcast_to_agent(agent, ...)`（agent=None 时 fallback 到全局 broadcast）；`pending_meta[cb_id]` 额外存 `session_id` 用于 reconnecting client 的 hello replay 过滤
+- **`app/agent/session.py`** — 缩成 50 行 thin wrapper：`open_session / new_session` 都 delegate 给 `manager.get_or_create`。删 `init_client`（被 manager._connect 取代）
+- **`app/main.py:lifespan`** — `state.cwd_root = ...` 一次性补，删 `state.cwd = ...` 因字段被删；启动调 `open_session(latest) or new_session()` warm 一个 agent；退出调 `manager.shutdown()` 而不是 `state.client.disconnect()`
+- **`app/api/meta.py:/api/health`** — 新增 `active_sessions: manager.active_ids()` 字段；session_id / mode / model 从 `manager.get(db.latest_session_id())` 读
+- **`app/api/sessions.py:GET /api/sessions current`** — 从 `state.session_id` 改成 `db.latest_session_id()`；DELETE 改成走 `manager.destroy(sid)`，扔掉"自动新建替代 session"的逻辑（那是 WS handler 的 `cmd:delete_session` 干的活）
+- **`notion_sync/notion_api.py:NotionClient._http`** — 加 429 + 5xx 退避：429 honors `Retry-After`（cap 30s）；5xx exp backoff `0.1/0.2/0.4/0.8s`，最多 4 重试；其它 4xx fail fast。`_throttle()` 删掉，替换成 `_TokenBucket(capacity=3, refill=3/sec)`，支持 3 req 的小突发然后稳定 3 req/s
+- **测试新增**：
+  - `tests/fakes/sdk_client.py` `FakeClient`（44 行）— mock `ClaudeSDKClient`，避免单测里启动 bundled claude 子进程
+  - `tests/test_session_manager.py`（113 行，6 测试）— get_or_create 幂等 / 两 session 互不影响 / recreate 等 turn_lock / destroy 取消 in-flight task / shutdown 清所有 / recreate 未知 sid 报 KeyError
+  - `tests/test_notion_api_backoff.py`（80 行，5 测试）— 429+Retry-After / 5xx 指数退避 / 4xx 不重试 / 5xx 重试耗尽 / token bucket burst + 节流
+- **TDD nominal**：Task 4 (session manager) 和 Task 15 (notion backoff) 都先写测看红再写实现看绿
+
+### 闸门
+- ✅ 35/35 单元测试全部 green（含本期新增 11 个 + 之前的 24 个）
+- ✅ `tests/smoke_backend.py` 5/5
+- ✅ Replay diff：post-Task-15 deployed code 连续两次 driver run，102 records byte-equal
+- ✅ 17 次 deploy 全部 health check 一次过
+- ✅ 3 小时 staging soak 后 journal 0 ERROR（48h 目标缩短，按 Phase 1/2 同样的实际惯例）
+- ⏸ 双设备 cross-talk 手测（Task 14）— 用户选跳过，理由：实际多 session 行为已通过 unit test + `recreate-waits-for-in-flight-turn` 覆盖
+
+### 偏离计划
+1. **Task 9 之前的中间状态不可 deploy**：plan 预期 Task 5 改 `make_options(agent)` 时 `app/agent/session.py:init_client` 还在调旧签名。subagent 第一次 Task 5 误判为 BLOCKED；我补 context 解释"Tasks 5-10 之间是 known-transitional state，Task 13 之前不部署"后才推进。Phase 2 Task 6 用了类似的 stub 模式，Phase 3 没用 stub，靠"不在中间状态部署"的纪律走完。
+2. **Task 11 顺手做了 Task 12 的一半**：subagent 删 state per-session 字段时，看到 `app/main.py:lifespan` 仍在引用 `state.cwd / state.client`，主动把那两处更新了。Task 12 实际只剩 hoisting + 错误信息打磨。
+3. **Subagent-Driven 模式中 API 偶发 529 overload**：Task 4 review 时 reviewer 子任务两次返回 529 错误。退到 controller-side 自验代码 + commit message + 测试输出。剩 14 个 task 不再用 review-subagent，直接 implementer + controller 自查。
+4. **Task 13 baseline 需重录**：post-Task-12 状态下 `/api/health` 新加 `active_sessions` 字段、`/api/sessions current` 改读 `db.latest_session_id()`、`/api/usage` cost 数随真实使用涨，原 phase3_baseline 不 match。按 plan 指示 `cp /tmp/p3after.jsonl tests/fixtures/phase3_baseline.jsonl` 重锚定。Task 16 又因 PWA 后台轮询 `/api/sessions`、`/api/today-todos` 导致 102 vs 118 records 失配；连续两次紧贴运行让两次的 ambient 一致，diff 才回到 102 OK。
+5. **`get_or_create` race 修复**：code reviewer 在 Task 3 发现 slot reserved before await 的 race window — `await self._connect(agent)` 中两个并发同 sid 都会构建 client，第二个 write 覆盖第一个，第一个 client 漏掉 disconnect。当场修：插 dict 在 await 之前 + rollback on exception。`turn.py` 已有 `agent.client is None` 处理，race 第二个 caller 拿到半构造 agent 时会 graceful 失败而不是 crash。
+6. **跳过 48h staging soak 改 3 小时**：与 Phase 0/1/2 同样的实际惯例。本期改动是 hot path（SDK session + WS handler 全重写），3 小时 soak 偏短；用户接受风险手动批准合并。
+
+### 量化
+- 新增/重写 11 个 .py 文件（含 2 新文件 `agent.py` + `manager.py`，9 重大改写）
+- 新增测试 + fake fixture: 237 行（FakeClient 44 + test_session_manager 113 + test_notion_api_backoff 80）
+- AppState 字段：14 → 6（−8）
+- `notion_sync/notion_api.py`: 104 → 157 行（+53，加 retry + token bucket 逻辑）
+
+### 修了哪些之前的隐藏炸弹
+- **多设备并发 = 全局 client 撕裂**：原 `state.client` 是单例，任何 device 切 model/cwd 都重建全局 client，意味着同时连的另一台设备的 in-flight turn 会被切断。现在每个 session 一个 agent，`recreate` 拿 turn_lock 等 in-flight turn 结束再换 client。
+- **Notion 429 / 5xx 直接抛**：原 `_http` 任何 HTTPError 都 raise，sync runner 遇到偶发 429 直接整轮跪掉。现在 429 honors Retry-After、5xx 指数退避，4 retries 后才放弃。
+- **Notion 节流过粗**：原 `_throttle()` 每个请求至少 sleep 500ms，sync 长链路（30+ pages）多花 15s+。改 token bucket（capacity=3, refill=3/s）后小突发能并发跑完。
+
+### 下一步
+👉 Phase 4 · 前端模块化（`static/app.js` ~5500 行 → 25+ ES Modules，CSS 拆 12 文件，DOMPurify XSS 防护，流式渲染 CPU 优化）
+新窗口续接指令："继续重构路线图，从 Phase 4 开始"
+
+---
+
 ## 2026-06-07 — Phase 2 · 后端拆包 `server.py` → `app/`
 
 **Branch:** `refactor/phase-2-app-package` (17 commits, `a9ba3e6..f61c5b2` + recorder strip)
