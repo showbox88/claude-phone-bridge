@@ -1,0 +1,309 @@
+/* Top bar — title, source picker button, version badge, actions, menu dropdown,
+ * workspace indicator, model pill + #model-menu, YOLO toggle, dot indicator,
+ * chat-mode body modifier, and the camera button mobile-only switch.
+ * Phase 4 Task 17 — extracted from style.css §top bar + §workspace indicator
+ * + §menu segmented (Chat|Code) + §model pill / model menu. */
+
+.app-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 10;
+}
+/* Version badge — inline pill that sits right after the source-name's caret
+   inside .source-btn, so the version is always visible (never hidden by the
+   drawer or covered by a long session title). Auto-synced from the `?v=N`
+   query on the loaded app.js script tag (see app.js). */
+.app-version {
+  display: inline-flex; align-items: center;
+  margin-left: 6px;
+  font: 600 10px/1 ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color: var(--text-3);
+  background: var(--bg-3);
+  padding: 2px 6px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  letter-spacing: .3px;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.app-version:empty { display: none; }
+.app-bar .title {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 15px;
+  overflow: hidden;
+}
+.app-bar .title-stack {
+  display: flex; flex-direction: column; gap: 0;
+  min-width: 0; flex: 1;
+}
+.source-btn {
+  background: transparent; border: 0; color: var(--text);
+  padding: 0; cursor: pointer;
+  font-size: 14px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: 100%;
+  letter-spacing: .01em;
+}
+.source-btn #source-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 40vw;
+}
+.source-btn .caret {
+  display: inline-flex;
+  color: var(--text-3); flex-shrink: 0;
+  transition: transform .2s;
+}
+.source-btn:hover .caret { transform: translateY(1px); color: var(--accent); }
+.session-title-sub {
+  font-size: 11px; color: var(--text-3); font-weight: normal;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: -1px;
+}
+.app-bar .cwd {
+  font-size: 11px; color: var(--text-3); font-weight: normal;
+  margin-left: 4px;
+  max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.app-bar .actions { display: flex; gap: 2px; }
+
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #b34;
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(179, 51, 68, 0.5);
+  transition: background .2s, box-shadow .2s;
+}
+.dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success-glow); }
+.dot.connecting { background: #c80; box-shadow: 0 0 8px rgba(204,136,0,0.6); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+
+/* dropdown menu */
+.menu {
+  position: absolute; right: 8px; top: 50px;
+  background: var(--bg-3); border: 1px solid var(--line-2);
+  border-radius: 12px; padding: 6px; z-index: 30;
+  display: flex; flex-direction: column; min-width: 180px;
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(8px);
+}
+.menu button {
+  display: flex; align-items: center; gap: 10px;
+  background: transparent; border: 0; color: var(--text);
+  text-align: left; padding: 10px 12px; border-radius: 8px;
+  font-size: 14px; cursor: pointer;
+  transition: background .12s;
+}
+.menu button .ic { color: var(--text-3); display: inline-flex; }
+.menu button:hover { background: var(--bg-4); }
+.menu button:hover .ic { color: var(--text); }
+.menu.hidden { display: none; }
+
+/* attach (⬆) popover — anchored above the composer button.
+   Selector is `.menu.attach-menu` so it outranks the desktop `.menu` rule
+   inside @media (min-width: 768px) that pins top-bar dropdowns to top-right. */
+.attach-wrap { position: relative; display: inline-flex; }
+.menu.attach-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  top: auto; right: auto;
+  min-width: 160px;
+}
+
+/* ---------- workspace indicator + model pill (now lives in the app-bar) ---------- */
+.workspace-indicator {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 5px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  box-shadow: var(--inset-raised);
+}
+.workspace-indicator .wi-ic { display: inline-flex; opacity: .85; }
+.workspace-indicator.chat { color: var(--chat-color); border-color: rgba(179,157,219,.3); }
+.workspace-indicator.chat .wi-ic { filter: drop-shadow(0 0 4px var(--chat-glow)); }
+.workspace-indicator.code { color: var(--accent); border-color: rgba(204,120,92,.3); }
+.workspace-indicator.code .wi-ic { filter: drop-shadow(0 0 4px var(--accent-glow)); }
+.app-bar .actions { gap: 6px; align-items: center; }
+.app-bar .model-pill { padding: 4px 8px; font-size: 12px; }
+@media (max-width: 480px) {
+  /* Tight phones: hide the static indicator (mode is also visible elsewhere)
+     and shrink the model pill so the title still gets room. */
+  .app-bar .workspace-indicator { display: none; }
+  .app-bar .model-pill { padding: 3px 6px; font-size: 11px; }
+}
+
+/* in chat mode, hide cwd-related controls (PC file picker, cwd label) */
+body.mode-chat #attach-menu [data-code-only],
+body.mode-chat .app-bar .cwd { display: none; }
+
+/* Show camera button only on touch / mobile devices.
+   Browsers that ignore `capture` (most desktops) make it act like a normal
+   file picker, which is redundant with the + button — so we hide it there. */
+.mobile-only { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .mobile-only { display: inline-flex; }
+}
+
+/* ---------- menu segmented (Chat|Code) — used in drawer ---------- */
+.menu-segment {
+  display: flex;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 3px;
+  margin: 12px 12px 0;
+  gap: 2px;
+  box-shadow: var(--inset-recess);
+}
+.drawer .menu-segment + .new-session { margin-top: 8px; }
+.menu-segment .seg-btn {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--text-2);
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: .02em;
+  transition: background .2s, color .2s, box-shadow .2s;
+}
+.menu-segment .seg-btn.active {
+  background: var(--bg-4);
+  color: var(--text);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.menu-segment .seg-btn[data-workspace="chat"].active { color: var(--chat-color); }
+.menu-segment .seg-btn[data-workspace="chat"].active .seg-icon { filter: drop-shadow(0 0 4px var(--chat-glow)); }
+.menu-segment .seg-btn[data-workspace="code"].active { color: var(--accent); }
+.menu-segment .seg-btn[data-workspace="code"].active .seg-icon { filter: drop-shadow(0 0 4px var(--accent-glow)); }
+.menu-segment .seg-btn:hover:not(.active) {
+  color: var(--text);
+  background: var(--bg-3);
+}
+.menu-segment .seg-btn .seg-icon {
+  display: inline-flex;
+  opacity: .9;
+}
+.menu-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 8px;
+}
+
+.model-pill {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex; align-items: center; gap: 5px;
+  transition: background .15s, color .15s, border-color .15s, box-shadow .15s;
+  box-shadow: var(--inset-raised);
+}
+.model-pill:hover {
+  background: var(--bg-4); color: var(--text);
+  border-color: rgba(204,120,92,0.35);
+}
+.model-pill .caret { display: inline-flex; opacity: .55; }
+
+#model-menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 200px;
+}
+#model-menu .model-item {
+  text-align: left;
+  padding: 8px 12px;
+  display: flex; flex-direction: column; gap: 2px;
+}
+#model-menu .model-item.active { background: var(--bg-4); }
+#model-menu .model-item .label { font-weight: 500; color: var(--text); }
+#model-menu .model-item .desc { font-size: 11px; color: var(--text-3); }
+
+/* YOLO toggle row in the model menu */
+#model-menu .yolo-toggle {
+  position: relative;
+  padding-right: 38px;
+  border-radius: 8px;
+}
+#model-menu .yolo-toggle.on .label { color: #f59e0b; }
+#model-menu .yolo-toggle .yolo-dot {
+  position: absolute;
+  right: 12px; top: 50%;
+  width: 24px; height: 14px;
+  border-radius: 7px;
+  background: var(--bg-4);
+  border: 1px solid var(--line-2);
+  transform: translateY(-50%);
+  transition: background .15s, border-color .15s;
+}
+#model-menu .yolo-toggle .yolo-dot::after {
+  content: '';
+  position: absolute;
+  top: 1px; left: 1px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: transform .15s, background .15s;
+}
+#model-menu .yolo-toggle .yolo-dot.on {
+  background: rgba(245, 158, 11, .25);
+  border-color: #f59e0b;
+}
+#model-menu .yolo-toggle .yolo-dot.on::after {
+  background: #f59e0b;
+  transform: translateX(10px);
+}
+#model-menu .model-sep {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 8px;
+}
+
+/* When YOLO is on, give the model pill itself a warm halo so it's obvious
+   at a glance — even with the menu closed — that confirmations are off. */
+.model-pill.yolo {
+  border-color: #f59e0b;
+  box-shadow: 0 0 0 1px rgba(245,158,11,.35), 0 0 12px rgba(245,158,11,.25);
+  color: #f59e0b;
+}
+.model-pill.yolo:hover { border-color: #f59e0b; color: #f59e0b; }
+
+/* ---------- Today's-todos bell icon (the trigger button — not the panel) ---------- */
+.icon-btn.alert {
+  color: #f59e0b;
+  animation: bell-shake 4s ease-in-out infinite;
+  transform-origin: 50% 12%;
+}
+.icon-btn.alert svg { fill: #f59e0b; stroke: #f59e0b; }
+@keyframes bell-shake {
+  0%, 86%, 100% { transform: rotate(0); }
+  88%  { transform: rotate(-14deg); }
+  90%  { transform: rotate(12deg); }
+  92%  { transform: rotate(-9deg); }
+  94%  { transform: rotate(6deg); }
+  96%  { transform: rotate(-3deg); }
+  98%  { transform: rotate(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .icon-btn.alert { animation: none; }
+}

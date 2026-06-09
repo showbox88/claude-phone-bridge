@@ -1,0 +1,28 @@
+/* Base resets and global typography.
+ * Phase 4 Task 17 — extracted from style.css lines 34-74. */
+
+/* Universal SVG icon rendering: never let SVGs collapse, always centered. */
+svg { display: inline-block; flex-shrink: 0; vertical-align: middle; }
+.icon-btn svg, .send-btn svg, .source-btn svg, .model-pill svg,
+.seg-btn svg, .new-session svg, .menu button svg, .sp-add svg,
+.copy-btn svg { stroke-width: 1.75; }
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: contain;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+button { font-family: inherit; }

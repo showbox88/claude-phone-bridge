@@ -1,0 +1,95 @@
+/* Sync settings modal (.ss-*) + the SHARED .modal base used by sync,
+ * weekly-report, and cwd-browser modals. The shared base lives in this
+ * file because sync.css is the first dialog file (after checkin/usage)
+ * to load that defines modal chrome — load order is sync → weekly → cwd
+ * → bell, so anything earlier doesn't need overrides.
+ *
+ * Sync-targets table + add dialog also live here.
+ * Phase 4 Task 17 — extracted from style.css §directory picker modal
+ * (the shared .modal chrome) + §sync targets table + add dialog. */
+
+/* ---- shared modal base (used by .usage-modal, .wr-modal, .cwd-modal) ---- */
+.modal-bg {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+.modal-bg.hidden { display: none; }
+.modal {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  width: 92vw; max-width: 540px;
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.modal-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+.modal-foot {
+  display: flex; gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line);
+}
+.modal-foot button {
+  flex: 1;
+  padding: 9px;
+  border-radius: 8px; border: 1px solid var(--line-2);
+  background: var(--bg-2); color: var(--text);
+  font-size: 14px; cursor: pointer;
+}
+.modal-foot .pick { background: var(--accent); color: #fff; border-color: var(--accent); }
+.modal-foot button:hover { filter: brightness(1.1); }
+
+/* ---- sync targets table + add dialog ---- */
+.sync-targets-section { margin-top: 24px; }
+.sync-targets-section h4 { margin: 0 0 8px; font-size: 14px; color: #888; }
+.sync-targets-tbody { display: flex; flex-direction: column; gap: 6px; }
+.sync-targets-loading, .sync-targets-empty, .sync-targets-error {
+  font-size: 13px; color: #666; padding: 8px;
+}
+.sync-targets-error { color: #c33; }
+.st-row {
+  display: grid;
+  grid-template-columns: 80px auto auto 1fr 1fr 28px;
+  gap: 8px; align-items: center;
+  font-size: 13px;
+  padding: 6px 8px; border-radius: 6px; background: #1a1a1a;
+}
+.st-name { font-weight: 500; }
+.st-check { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.st-field {
+  background: #0f0f0f; border: 1px solid #333; color: #eee;
+  padding: 4px 6px; border-radius: 4px; min-width: 0;
+}
+.st-del {
+  background: transparent; border: 1px solid #444; color: #c33;
+  width: 24px; height: 24px; border-radius: 4px; cursor: pointer;
+}
+.st-del:hover { background: #2a1414; }
+.sync-targets-add {
+  margin-top: 8px; background: #1a3a1a; border: 1px solid #2a5a2a;
+  color: #6c6; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+}
+.sync-add-dialog::backdrop { background: rgba(0,0,0,0.5); }
+.sa-form { display: flex; flex-direction: column; gap: 12px; padding: 16px;
+           min-width: 320px; background: #0f0f0f; color: #eee; }
+.sa-head { display: flex; align-items: center; justify-content: space-between; }
+.sa-fields { display: flex; flex-direction: column; gap: 10px; }
+.sa-row { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.sa-row select, .sa-row input[type=text] {
+  background: #1a1a1a; border: 1px solid #333; color: #eee;
+  padding: 6px; border-radius: 4px;
+}
+.sa-toggle { flex-direction: row; align-items: center; gap: 8px; }
+.sa-submit-bar { display: flex; justify-content: flex-end; }
+.sa-go {
+  background: #2a5a2a; border: none; color: white;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer;
+}

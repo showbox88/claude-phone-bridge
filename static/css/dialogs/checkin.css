@@ -1,0 +1,289 @@
+/* Check-in dialog — POI picker (stage 1) and check-in form (stage 2).
+ * The in-bubble .checkin-card preview lives in messages.css since it
+ * renders inside .msg.user. Phase 4 Task 17 — extracted from style.css
+ * §Check-in dialog (POI picker) + §Check-in form (Stage 2). */
+
+.checkin-dialog {
+  border: 0;
+  padding: 0;
+  background: var(--bg-2);
+  color: var(--text);
+  border-radius: 18px;
+  width: min(92vw, 520px);
+  max-height: 88vh;
+  box-shadow: var(--shadow-lg), 0 0 30px var(--accent-glow-2);
+  overflow: hidden;
+}
+.checkin-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+}
+.cd-form {
+  display: flex;
+  flex-direction: column;
+  max-height: 88vh;
+  margin: 0;
+}
+.cd-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 12px 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.cd-title {
+  font-weight: 600;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.cd-status {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cd-status.error { color: var(--error); }
+.cd-status.ready { color: var(--success); }
+.cd-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px;
+  min-height: 80px;
+  max-height: 50vh;
+}
+.cd-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.cd-row:hover { background: var(--bg-3); }
+.cd-row:active { background: var(--bg-4); }
+.cd-row .cd-icon {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-3);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  box-shadow: var(--inset-recess);
+}
+.cd-row.osm  .cd-icon { color: #7cb;  }
+.cd-row.amap .cd-icon { color: var(--accent); }
+.cd-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.cd-name {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  display: flex; gap: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-meta .cd-dist {
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.cd-empty {
+  padding: 30px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.cd-loading {
+  padding: 30px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.cd-spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--line-2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+.cd-manual {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.cd-manual input {
+  flex: 1;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  box-shadow: var(--inset-recess);
+}
+.cd-manual input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cd-go {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  padding: 0 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+.cd-go:hover { background: var(--accent-2); }
+.cd-go:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+/* ---------- Check-in form (Stage 2) ---------- */
+.cd-stage { display: flex; flex-direction: column; min-height: 0; }
+.cd-stage.hidden { display: none; }
+.cd-title-stack {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 0;
+  overflow: hidden;
+}
+.cd-title-stack .cd-title {
+  font-weight: 600; font-size: 15px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-title-stack .cd-status {
+  font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cd-fields {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 14px;
+  max-height: 55vh;
+}
+.cd-field { display: flex; flex-direction: column; gap: 6px; }
+.cd-field.cd-row { flex-direction: row; align-items: center; gap: 8px; }
+.cd-field.cd-row .cd-label { flex-shrink: 0; width: 44px; }
+.cd-label {
+  font-size: 12px; font-weight: 500;
+  color: var(--text-3);
+  letter-spacing: .02em;
+}
+.cd-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.cd-chips button {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text-2);
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 13px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all .15s;
+}
+.cd-chips button:hover {
+  background: var(--bg-4); color: var(--text);
+  border-color: var(--line-2);
+}
+.cd-chips button.active {
+  background: rgba(204,120,92,0.15);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow-2);
+}
+.cd-field input[type="number"],
+.cd-field input[type="text"],
+.cd-field select,
+.cd-field textarea {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  box-shadow: var(--inset-recess);
+}
+.cd-field input[type="number"]:focus,
+.cd-field input[type="text"]:focus,
+.cd-field select:focus,
+.cd-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cd-field.cd-row input[type="number"] { flex: 1; min-width: 0; }
+.cd-field.cd-row select { width: 90px; }
+.cd-field textarea {
+  resize: vertical;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.cd-field input[type="range"] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 2px;
+  outline: none;
+}
+.cd-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+}
+.cd-field input[type="range"]::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 0;
+  box-shadow: 0 0 8px var(--accent-glow);
+  cursor: pointer;
+}
+.cd-score-val {
+  width: 32px;
+  text-align: right;
+  font-size: 14px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.cd-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-2);
+  padding: 4px 0;
+}
+.cd-toggle input[type="checkbox"] {
+  width: 18px; height: 18px;
+  accent-color: var(--accent);
+  margin: 0;
+}
+.cd-submit-bar {
+  padding: 10px 14px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.cd-submit-bar .cd-go {
+  width: 100%;
+  padding: 12px;
+  font-size: 15px;
+}

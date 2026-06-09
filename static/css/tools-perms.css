@@ -1,0 +1,163 @@
+/* Tool calls (collapsible groups, individual tool blocks) and permission
+ * cards. Phase 4 Task 17 — extracted from style.css §tool group + §tool
+ * calls + §permission card. */
+
+/* tool group — wraps a run of tool calls into one collapsible strip */
+.tool-group {
+  align-self: stretch;
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  overflow: hidden;
+}
+.tool-group > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-3);
+  user-select: none;
+}
+.tool-group > summary::-webkit-details-marker { display: none; }
+.tool-group .tg-icon {
+  font-size: 11px;
+  display: inline-block;
+  transition: transform .15s;
+}
+.tool-group[open] .tg-icon { transform: rotate(90deg); }
+.tool-group .tg-label { font-weight: 500; }
+.tool-group .tg-count {
+  background: var(--bg-3);
+  color: var(--text-2);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+}
+.tool-group .tg-body {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+}
+.tool-group .tool-block { font-size: 12px; }
+
+/* tool calls */
+.tool-block {
+  align-self: stretch;
+  background: var(--tool-bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+  overflow: hidden;
+}
+.tool-block summary {
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-2);
+  user-select: none;
+}
+.tool-block summary::-webkit-details-marker { display: none; }
+.tool-block summary::before {
+  content: "▸";
+  font-size: 11px; color: var(--text-3);
+  transition: transform .15s;
+  display: inline-block;
+}
+.tool-block[open] summary::before { transform: rotate(90deg); }
+.tool-block .tool-name { color: var(--text); font-weight: 500; }
+.tool-block .tool-icon { color: var(--accent); display: inline-flex; }
+.tool-block.error .tool-icon { color: var(--error); }
+.tool-block.result .tool-icon { color: var(--success); }
+.tool-block.error .tool-name { color: var(--error); }
+.tool-block.result .tool-name { color: var(--success); }
+.tool-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* permission card */
+.perm-card {
+  align-self: stretch;
+  background: rgba(204,120,92,.08);
+  border: 1px solid rgba(204,120,92,.4);
+  border-radius: 14px;
+  padding: 12px 14px;
+  box-shadow: 0 0 20px var(--accent-glow-2), var(--shadow-md);
+  font-size: 14px;
+}
+.perm-card.resolved { opacity: .55; }
+.perm-card.resolved .perm-actions button { cursor: not-allowed; opacity: .6; }
+.perm-card .perm-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  margin-left: auto;
+}
+.perm-card .perm-tag-allow {
+  background: rgba(111,191,115,0.15);
+  color: var(--success);
+  border: 1px solid rgba(111,191,115,0.4);
+}
+.perm-card .perm-tag-deny {
+  background: rgba(224,123,123,0.15);
+  color: var(--error);
+  border: 1px solid rgba(224,123,123,0.4);
+}
+.perm-card .perm-tag-timeout {
+  background: var(--bg-3);
+  color: var(--text-3);
+  border: 1px solid var(--line-2);
+}
+.perm-card .perm-head {
+  font-weight: 500; margin-bottom: 10px;
+  color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+.perm-card .perm-head .ph-icon {
+  color: var(--accent);
+  display: inline-flex;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.perm-card .perm-head > span:nth-child(2) { flex: 1; min-width: 0; }
+.perm-card .copy-btn { margin-left: auto; }
+.perm-card .perm-head .tool { color: var(--accent); font-weight: 600; }
+.perm-card pre {
+  margin: 0 0 10px;
+  background: var(--bg);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 180px; overflow: auto;
+  border: 1px solid var(--line);
+}
+.perm-card .perm-actions {
+  display: flex; gap: 8px;
+  justify-content: space-between;
+}
+.perm-card .perm-actions button {
+  flex: 0 0 auto;
+  min-width: 96px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: 0;
+  font-size: 14px; font-weight: 500;
+  cursor: pointer;
+}
+.perm-card .allow {
+  background: var(--accent); color: #fff;
+}
+.perm-card .allow:active { background: var(--accent-2); }
+.perm-card .deny {
+  background: var(--bg-3); color: var(--text-2);
+  border: 1px solid var(--line-2);
+}

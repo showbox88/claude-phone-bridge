@@ -1,0 +1,179 @@
+/* Session drawer — mask, panel, search, new-session button, session list rows.
+ * Phase 4 Task 17 — extracted from style.css §session drawer. */
+
+.drawer-mask {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  z-index: 40;
+  opacity: 0; transition: opacity .2s;
+  pointer-events: none;
+}
+.drawer-mask:not(.hidden) { opacity: 1; pointer-events: auto; }
+
+.drawer {
+  position: fixed;
+  top: 0; bottom: 0; left: 0;
+  width: 80vw; max-width: 320px;
+  background: var(--bg-2);
+  border-right: 1px solid var(--line);
+  z-index: 50;
+  display: flex; flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform .22s ease-out;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.drawer:not(.hidden) { transform: translateX(0); }
+
+.drawer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-title { font-weight: 600; font-size: 16px; }
+
+/* Drawer search — sits above 新建会话, filters by title + message content.
+   Padded to the same height as the new-session button below it for a tidy
+   stack. */
+.drawer-search {
+  position: relative;
+  margin: 10px 12px 4px;
+  display: flex; align-items: center;
+}
+.drawer-search .ds-ic {
+  position: absolute; left: 12px;
+  display: inline-flex; align-items: center;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.drawer-search input {
+  flex: 1; min-width: 0;
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 11px 32px 11px 36px;          /* matches .new-session vertical padding */
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+  /* hide native search clear-X (we render our own) */
+  -webkit-appearance: none; appearance: none;
+}
+.drawer-search input::-webkit-search-cancel-button { display: none; }
+.drawer-search input::placeholder { color: var(--text-3); }
+.drawer-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow-2);
+}
+.drawer-search .ds-clear {
+  position: absolute; right: 6px;
+  background: transparent; border: 0;
+  color: var(--text-3); cursor: pointer;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  padding: 0;
+}
+.drawer-search .ds-clear:hover { background: var(--bg-4); color: var(--text); }
+.drawer-search .ds-clear.hidden { display: none; }
+
+/* Match snippet under session title (search results only) */
+.si-snippet {
+  font-size: 11px; color: var(--text-3);
+  margin-top: 3px;
+  line-height: 1.35;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+.si-snippet mark {
+  background: var(--accent-glow-2);
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.new-session {
+  display: flex; align-items: center; gap: 8px;
+  margin: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--line-2);
+  background: var(--bg-3);
+  border-radius: 12px;
+  color: var(--text);
+  font-size: 14px; font-weight: 500;
+  cursor: pointer;
+  transition: background .2s, border-color .2s, box-shadow .2s;
+  box-shadow: var(--inset-raised);
+}
+.new-session:hover {
+  background: var(--bg-4);
+  border-color: var(--accent);
+  box-shadow: 0 0 16px var(--accent-glow-2), var(--inset-raised);
+}
+.new-session .plus {
+  color: var(--accent);
+  display: inline-flex;
+  filter: drop-shadow(0 0 4px var(--accent-glow));
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+.session-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  position: relative;
+}
+.session-item .si-badge {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  flex-shrink: 0;
+}
+.session-item.mode-code .si-badge {
+  background: rgba(204,120,92,.15);
+  color: var(--accent);
+}
+.session-item.mode-chat .si-badge {
+  background: rgba(179,157,219,.15);
+  color: #b39ddb;
+}
+.session-item:hover { background: var(--bg-3); }
+.session-item.active { background: var(--bg-4); }
+.session-item .si-main {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column;
+  gap: 2px;
+}
+.session-item .si-title {
+  font-size: 14px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.session-item.empty-title .si-title { color: var(--text-3); font-style: italic; }
+.session-item .si-meta {
+  font-size: 11px; color: var(--text-3);
+  display: flex; gap: 8px;
+}
+.session-item .si-edit,
+.session-item .si-del {
+  opacity: 0;
+  background: transparent; border: 0;
+  color: var(--text-3); cursor: pointer;
+  padding: 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.session-item:hover .si-edit,
+.session-item:hover .si-del,
+.session-item.active .si-edit,
+.session-item.active .si-del { opacity: 1; }
+.session-item .si-edit:hover { background: var(--bg); color: var(--accent); }
+.session-item .si-del:hover { background: var(--bg); color: var(--error); }

@@ -1,0 +1,372 @@
+/* Messages list — bubbles, markdown rendering (h1-h6, p, ul/ol, blockquote,
+ * tables, code blocks with copy buttons), img grids, doc file lists, and the
+ * "typing" indicator. Phase 4 Task 17 — extracted from style.css §messages
+ * + §markdown elements + §tables + §typing indicator. */
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 12px 24px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.empty-state {
+  flex: 1;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 16px;
+  color: var(--text-2);
+  text-align: center;
+  padding: 40px 20px;
+}
+.empty-state .logo {
+  color: var(--accent);
+  line-height: 1;
+  filter: drop-shadow(0 0 12px var(--accent-glow));
+  display: inline-flex; justify-content: center;
+}
+.empty-state .hint {
+  font-size: 15px; line-height: 1.6;
+  color: var(--text-2);
+}
+.empty-state .hint small {
+  font-size: 12px; color: var(--text-3);
+}
+
+.msg {
+  max-width: 92%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  word-wrap: break-word;
+  line-height: 1.55;
+  font-size: 15px;
+}
+.msg.user {
+  align-self: flex-end;
+  background: var(--user-bg);
+  border: 1px solid var(--line);
+  border-bottom-right-radius: 4px;
+}
+.msg.assistant {
+  align-self: flex-start;
+  background: transparent;
+  padding: 4px 2px;
+  max-width: 100%;
+}
+.msg.system {
+  align-self: center;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 4px 0;
+  border: 0;
+}
+.msg.error {
+  align-self: stretch;
+  background: rgba(224,123,123,.08);
+  border: 1px solid rgba(224,123,123,.3);
+  color: var(--error);
+  font-size: 13px;
+}
+
+.msg pre {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin: 8px 0;
+  white-space: pre;
+}
+
+/* code block with copy button */
+.code-block {
+  position: relative;
+  margin: 8px 0;
+}
+.code-block pre {
+  margin: 0;
+}
+.copy-btn {
+  background: var(--bg-3);
+  color: var(--text-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+  line-height: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.code-block .copy-btn {
+  position: absolute;
+  top: 6px; right: 6px;
+  opacity: 0;
+  padding: 5px;
+}
+.code-block:hover .copy-btn,
+.code-block:active .copy-btn { opacity: 1; }
+.copy-btn:hover { background: var(--bg-4); color: var(--text); border-color: rgba(204,120,92,0.4); }
+.copy-btn.inline {
+  margin-left: auto;
+  padding: 3px 5px;
+}
+.copy-btn.ok { background: rgba(111,191,115,.15); border-color: var(--success); color: var(--success); }
+.copy-btn.fail { background: rgba(224,123,123,.15); border-color: var(--error); color: var(--error); }
+
+/* on touch devices, always show copy button (no hover) */
+@media (hover: none) {
+  .code-block .copy-btn { opacity: 1; }
+}
+.msg code {
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.msg pre code { background: transparent; padding: 0; font-size: 13px; }
+
+/* markdown elements rendered by marked */
+.msg h1, .msg h2, .msg h3, .msg h4, .msg h5, .msg h6 {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.msg h1 { font-size: 1.4em; }
+.msg h2 { font-size: 1.25em; }
+.msg h3 { font-size: 1.1em; }
+.msg h4, .msg h5, .msg h6 { font-size: 1em; color: var(--text-2); }
+.msg p { margin: 6px 0; }
+.msg p:first-child { margin-top: 0; }
+.msg p:last-child { margin-bottom: 0; }
+
+.msg ul, .msg ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+.msg li { margin: 2px 0; }
+.msg li > ul, .msg li > ol { margin: 2px 0; }
+
+.msg blockquote {
+  margin: 8px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--line-2);
+  color: var(--text-2);
+  background: var(--bg-2);
+  border-radius: 0 6px 6px 0;
+}
+
+.msg a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid rgba(204,120,92,.3);
+}
+.msg a:hover { border-bottom-color: var(--accent); }
+
+.msg hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 16px 0;
+}
+
+.msg strong { font-weight: 600; color: var(--text); }
+.msg em { font-style: italic; }
+.msg del { color: var(--text-3); text-decoration: line-through; }
+
+/* tables */
+.msg table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 13px;
+  width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+.msg table thead {
+  background: var(--bg-2);
+}
+.msg table th,
+.msg table td {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.msg table th {
+  font-weight: 600;
+  color: var(--text);
+}
+.msg table tbody tr:nth-child(even) {
+  background: rgba(255,255,255,.02);
+}
+
+.msg .img-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.msg .img-grid img {
+  width: 100%; max-height: 200px; object-fit: cover;
+  border-radius: 8px; display: block;
+  background: var(--bg-2);
+}
+.msg .file-list {
+  font-size: 12px; margin-bottom: 6px;
+  word-break: break-all;
+  color: var(--text-2);
+  display: flex; align-items: flex-start; gap: 6px;
+}
+.msg .file-list .fl-ic { color: var(--text-3); padding-top: 2px; flex-shrink: 0; }
+.msg .msg-text { white-space: pre-wrap; }
+
+/* document attachments inside user-message bubble */
+.msg .doc-list {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-bottom: 6px;
+}
+.msg .doc-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text-2);
+  font-size: 13px;
+  max-width: 100%;
+  box-shadow: var(--inset-raised);
+  transition: background .15s, color .15s, border-color .15s;
+}
+.msg .doc-link:hover { background: var(--bg-3); color: var(--text); border-color: var(--line-2); }
+.msg .doc-link .doc-icon { display: inline-flex; color: var(--text-3); }
+.msg .doc-link:hover .doc-icon { color: var(--accent); }
+.msg .doc-link .doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- Check-in card (renders inside user bubble) ---------- */
+/* Replaces the raw ```checkin YAML``` so the chat history reads cleanly. */
+.checkin-card {
+  background: linear-gradient(135deg, rgba(204,120,92,0.10), rgba(204,120,92,0.04));
+  border: 1px solid rgba(204,120,92,0.35);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0;
+  min-width: 220px;
+  box-shadow: 0 0 14px var(--accent-glow-2);
+}
+.cc-row { display: flex; align-items: center; gap: 10px; }
+.cc-main { gap: 10px; }
+.cc-pin {
+  width: 32px; height: 32px;
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  background: rgba(204,120,92,0.18);
+  color: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.cc-body { flex: 1; min-width: 0; }
+.cc-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-time {
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.cc-detail {
+  font-size: 12px;
+  color: var(--text-2);
+  padding-left: 42px;   /* aligns under name */
+}
+.cc-note {
+  font-size: 12px;
+  color: var(--text-2);
+  font-style: italic;
+  padding-left: 42px;
+  opacity: 0.85;
+}
+.cc-raw {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.cc-raw summary {
+  cursor: pointer;
+  padding: 2px 0;
+  list-style: none;
+  user-select: none;
+  opacity: 0.55;
+}
+.cc-raw summary::-webkit-details-marker { display: none; }
+.cc-raw summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 4px;
+  transition: transform .15s;
+}
+.cc-raw[open] summary::before { transform: rotate(90deg); }
+.cc-raw summary:hover { opacity: 0.9; }
+.cc-raw pre {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-3);
+}
+
+/* "Claude is working" typing indicator */
+.typing {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 14px;
+  margin: 2px 0 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  border-bottom-left-radius: 4px;
+}
+.typing span {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: typingDot 1.2s infinite ease-in-out both;
+}
+.typing span:nth-child(2) { animation-delay: 0.16s; }
+.typing span:nth-child(3) { animation-delay: 0.32s; }
+@keyframes typingDot {
+  0%, 70%, 100% { transform: translateY(0); opacity: 0.35; }
+  35%           { transform: translateY(-5px); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing span { animation: typingDotFade 1.4s infinite ease-in-out both; }
+  @keyframes typingDotFade {
+    0%, 100% { opacity: 0.35; }
+    50%      { opacity: 1; }
+  }
+}

@@ -1,0 +1,101 @@
+/* Page-level layout: main-pane, messages-inner / composer-inner flex containers,
+ * and the >=768px responsive grid that reflows the drawer into a real column.
+ * Phase 4 Task 17. */
+
+.main-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.messages-inner {
+  display: flex; flex-direction: column; gap: 14px;
+  width: 100%;
+  min-height: 100%;
+}
+.composer-inner {
+  display: flex; flex-direction: column; gap: 8px;
+  width: 100%;
+}
+
+/* ============================================================
+   Responsive: tablet (>=768px) — full-width top bar; collapsible drawer
+   sits in row 2 under the app-bar (animated grid column width).
+   ============================================================ */
+@media (min-width: 768px) {
+  body {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 0 1fr;        /* default: drawer collapsed */
+    height: 100vh;
+    padding: 0;
+    overflow: hidden;
+    transition: grid-template-columns .22s ease-out;
+  }
+  body.drawer-expanded { grid-template-columns: 280px 1fr; }
+
+  .app-bar {
+    grid-row: 1;
+    grid-column: 1 / -1;                  /* span both columns */
+    position: relative;                   /* anchor for absolute .app-version */
+  }
+
+  /* drawer lives in row 2 col 1 and its width follows the grid column */
+  .drawer {
+    grid-row: 2; grid-column: 1;
+    position: static;
+    transform: none !important;
+    width: auto; max-width: none;
+    overflow: hidden;                     /* clip inner content during collapse */
+    border-right: 1px solid var(--line);
+    padding-top: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* Children follow the drawer's grid-cell width — no min-width override, or
+     they'd overflow once we account for their margins (drawer = 280, child
+     min = 280, child margin = 12+12 → ~24px clipped on the right). */
+  .drawer.hidden { transform: none; }    /* neutralize mobile hide state */
+  .drawer-mask { display: none !important; }
+  body:not(.drawer-expanded) .drawer { visibility: hidden; }
+  body.drawer-expanded .drawer { visibility: visible; }
+  /* In-drawer X is redundant on desktop (hamburger toggles); keep for parity */
+
+  .main-pane {
+    grid-row: 2; grid-column: 2;
+    min-width: 0; min-height: 0;
+    display: flex; flex-direction: column;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .menu { right: 12px; top: 56px; }
+}
+
+/* ============================================================
+   Responsive: desktop (>=1024px) — cap content width, larger spacing
+   ============================================================ */
+@media (min-width: 1024px) {
+  body.drawer-expanded { grid-template-columns: 320px 1fr; }
+  .messages { padding: 24px 24px 32px; }
+  .messages-inner {
+    max-width: 820px;
+    margin: 0 auto;
+    gap: 18px;
+  }
+  .composer { padding: 12px 24px 16px; }
+  .composer-inner {
+    max-width: 820px;
+    margin: 0 auto;
+  }
+  .msg { font-size: 15px; }
+  .msg.user { max-width: 75%; }
+  .empty-state .logo { font-size: 72px; }
+  .app-bar { padding: 10px 16px; }
+}
+
+/* ============================================================
+   Responsive: wide desktop (>=1440px)
+   ============================================================ */
+@media (min-width: 1440px) {
+  body.drawer-expanded { grid-template-columns: 340px 1fr; }
+  .messages-inner, .composer-inner { max-width: 900px; }
+}
