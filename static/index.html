@@ -4,13 +4,29 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
   <meta name="theme-color" content="#0f0f0f">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Claude">
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="stylesheet" href="/static/style.css?v=46">
+  <link rel="stylesheet" href="/static/css/tokens.css?v=48">
+  <link rel="stylesheet" href="/static/css/base.css?v=48">
+  <link rel="stylesheet" href="/static/css/utilities.css?v=48">
+  <link rel="stylesheet" href="/static/css/layout.css?v=48">
+  <link rel="stylesheet" href="/static/css/appbar.css?v=48">
+  <link rel="stylesheet" href="/static/css/drawer.css?v=48">
+  <link rel="stylesheet" href="/static/css/messages.css?v=48">
+  <link rel="stylesheet" href="/static/css/tools-perms.css?v=48">
+  <link rel="stylesheet" href="/static/css/composer.css?v=48">
+  <link rel="stylesheet" href="/static/css/picker.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/checkin.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/usage.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/sync.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/weekly.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/cwd.css?v=48">
+  <link rel="stylesheet" href="/static/css/dialogs/bell.css?v=48">
   <title>Claude Bridge</title>
 </head>
 <body>
@@ -265,8 +281,9 @@
     </footer>
   </div>
 
-  <script src="/static/icons.js?v=46"></script>
+  <script src="/static/icons.js?v=48"></script>
   <script src="/static/marked.min.js"></script>
-  <script src="/static/app.js?v=46"></script>
+  <script src="/static/vendor/purify.min.js?v=48"></script>
+  <script type="module" src="/static/app.js?v=48"></script>
 </body>
 </html>

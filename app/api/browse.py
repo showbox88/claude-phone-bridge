@@ -7,10 +7,25 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+import db
+
 from app.persistence.files import _resolve_in_root, _to_rel
 from app.state import state
 
 router = APIRouter()
+
+
+def _current_session_cwd() -> str:
+    """The latest bridge session's cwd (relative to cwd_root), or ''.
+
+    Replaces the legacy `state.cwd` read — Phase 3 made cwd per-session
+    (on ClaudeAgent), so the "current" pointer for the browse modal now
+    comes from the most-recently-active session row in db."""
+    sid = db.latest_session_id()
+    if not sid:
+        return ""
+    sess = db.get_session(sid)
+    return (sess.get("cwd") or "") if sess else ""
 
 
 @router.get("/api/browse")
@@ -41,7 +56,7 @@ async def browse(path: str = ""):
         "abs": str(target).replace("\\", "/"),
         "parent": parent,
         "entries": entries,
-        "current": _to_rel(state.cwd),
+        "current": _current_session_cwd(),
     }
 
 

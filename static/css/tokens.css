@@ -1,0 +1,63 @@
+/* Design tokens. Single source for spacing/sizing/fonts/colors.
+ * Phase 4 Task 17 — extracted from the legacy :root block in style.css
+ * + added explicit --space-/-radius-/-font- naming for downstream
+ * features. Existing legacy variable names (e.g. --bg-0, --accent)
+ * are preserved verbatim so all existing rules keep working.
+ */
+:root {
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Font */
+  --font-xs: 11px;
+  --font-sm: 13px;
+  --font-base: 15px;
+  --font-lg: 17px;
+  --font-xl: 20px;
+}
+
+/* Legacy color / shadow vars — preserved verbatim from the original
+ * style.css :root block. Kept in a separate :root rule so the merge
+ * happens via the cascade and the two concerns stay readable. */
+:root {
+  --bg:        #0f0f0f;
+  --bg-2:      #161616;
+  --bg-3:      #1d1d1d;
+  --bg-4:      #262626;
+  --line:      #2a2a2a;
+  --line-2:    #383838;
+  --text:      #ececec;
+  --text-2:    #b3b3b3;
+  --text-3:    #6a6a6a;
+  --accent:    #cc785c;        /* Claude orange */
+  --accent-2:  #b56a4f;
+  --accent-glow:    rgba(204, 120, 92, 0.45);
+  --accent-glow-2:  rgba(204, 120, 92, 0.18);
+  --chat-color:     #b39ddb;
+  --chat-glow:      rgba(179, 157, 219, 0.35);
+  --user-bg:   #2b2b2b;
+  --tool-bg:   #1a1a1a;
+  --error:     #e07b7b;
+  --success:   #6fbf73;
+  --success-glow:   rgba(111, 191, 115, 0.5);
+
+  /* Neumorphic depth — subtle outer shadow + inner highlight */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.45);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.55), 0 1px 3px rgba(0,0,0,0.6);
+  --shadow-lg: 0 8px 28px rgba(0,0,0,0.65), 0 2px 6px rgba(0,0,0,0.55);
+  --inset-recess:   inset 0 1px 2px rgba(0,0,0,0.5), inset 0 -1px 0 rgba(255,255,255,0.025);
+  --inset-raised:   0 1px 0 rgba(255,255,255,0.04), var(--shadow-sm);
+  --glow-accent:    0 0 18px var(--accent-glow), 0 0 2px var(--accent-glow);
+}

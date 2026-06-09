@@ -1,0 +1,61 @@
+/* Usage modal — grid of stat cards, model-breakdown bar chart.
+ * Note: .usage-modal piggy-backs on the shared .modal base defined in
+ * dialogs/sync.css (which loads first among the dialog files).
+ * Phase 4 Task 17 — extracted from style.css §usage modal. */
+
+.usage-modal .modal {
+  width: 92vw; max-width: 600px;
+  max-height: 88vh;
+}
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 14px;
+}
+.usage-grid .stat {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+.usage-grid .stat .num {
+  font-size: 22px; font-weight: 600;
+  color: var(--accent);
+}
+.usage-grid .stat .lbl {
+  font-size: 11px; color: var(--text-3);
+  margin-top: 4px;
+}
+.usage-section {
+  padding: 0 14px 14px;
+}
+.usage-section h4 {
+  margin: 12px 0 8px;
+  font-size: 13px; color: var(--text-2);
+  font-weight: 500;
+}
+.usage-bars { display: flex; flex-direction: column; gap: 4px; }
+.usage-bar {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px;
+}
+.usage-bar .name { width: 70px; color: var(--text-2); flex-shrink: 0; }
+.usage-bar .bar-track {
+  flex: 1;
+  background: var(--bg-2);
+  border-radius: 4px;
+  height: 16px;
+  overflow: hidden;
+}
+.usage-bar .bar-fill {
+  background: var(--accent);
+  height: 100%;
+  border-radius: 4px;
+  transition: width .3s;
+}
+.usage-bar .val { color: var(--text-3); min-width: 60px; text-align: right; }
+
+@media (max-width: 540px) {
+  .usage-grid { grid-template-columns: 1fr; }
+}

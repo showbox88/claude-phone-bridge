@@ -1,0 +1,162 @@
+/* Source picker (full-screen landing overlay) + add/edit form modal.
+ * Phase 4 Task 17 — extracted from style.css §source picker + §add/edit form. */
+
+.source-picker {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  z-index: 200;
+  overflow-y: auto;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+.source-picker.hidden { display: none; }
+.source-picker .sp-inner {
+  width: 100%;
+  max-width: 540px;
+  display: flex; flex-direction: column;
+  padding: 40px 20px 20px;
+}
+.sp-head { text-align: center; margin-bottom: 28px; }
+.sp-head .sp-logo {
+  color: var(--accent);
+  line-height: 1; margin-bottom: 14px;
+  display: inline-flex; justify-content: center;
+  filter: drop-shadow(0 0 16px var(--accent-glow));
+}
+.sp-head h1 {
+  margin: 0 0 4px;
+  font-size: 22px; font-weight: 600;
+}
+.sp-head .sp-sub {
+  margin: 0; color: var(--text-2); font-size: 14px;
+}
+.sp-list {
+  display: flex; flex-direction: column; gap: 8px;
+  margin-bottom: 16px;
+}
+.sp-list .sp-empty {
+  padding: 30px 20px; text-align: center;
+  color: var(--text-3); font-size: 13px;
+}
+.sp-item {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color .2s, background .2s, box-shadow .2s, transform .15s;
+  box-shadow: var(--shadow-md);
+}
+.sp-item:hover { background: var(--bg-3); transform: translateY(-1px); box-shadow: var(--shadow-lg); }
+.sp-item.online { border-color: rgba(111,191,115,.35); }
+.sp-item.online:hover { box-shadow: var(--shadow-lg), 0 0 24px rgba(111,191,115,0.15); }
+.sp-item.offline { opacity: .55; cursor: not-allowed; }
+.sp-item.offline:hover { transform: none; }
+.sp-mark {
+  width: 38px; height: 38px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text-2);
+  flex-shrink: 0;
+  box-shadow: var(--inset-recess);
+}
+.sp-item.online .sp-mark { color: var(--accent); }
+.sp-status {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+  box-shadow: 0 0 6px rgba(0,0,0,.6);
+}
+.sp-item.online .sp-status { background: var(--success); box-shadow: 0 0 10px var(--success-glow); }
+.sp-item.offline .sp-status { background: #555; }
+.sp-item.checking .sp-status { background: #c80; animation: pulse 1s infinite; box-shadow: 0 0 8px rgba(204,136,0,0.6); }
+.sp-meta {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.sp-meta .sp-name {
+  font-size: 15px; font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sp-meta .sp-url {
+  font-size: 11px; color: var(--text-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sp-meta .sp-state {
+  font-size: 11px; color: var(--text-3);
+}
+.sp-item.online .sp-meta .sp-state { color: var(--success); }
+.sp-actions-inline {
+  display: flex; gap: 4px; align-items: center;
+}
+.sp-actions-inline button {
+  background: transparent; border: 0;
+  color: var(--text-3); cursor: pointer;
+  padding: 6px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .12s, color .12s;
+}
+.sp-actions-inline button:hover { background: var(--bg-4); color: var(--text); }
+.sp-actions-inline button[data-act="del"]:hover { color: var(--error); }
+.sp-actions { margin-top: auto; padding-top: 16px; }
+.sp-add {
+  width: 100%;
+  background: var(--bg-3);
+  border: 1px dashed var(--line-2);
+  color: var(--text-2);
+  padding: 14px;
+  border-radius: 14px;
+  font-size: 15px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  transition: border-color .2s, color .2s, background .2s;
+}
+.sp-add:hover { border-color: var(--accent); color: var(--text); background: var(--bg-2); }
+.sp-add:hover [data-icon] { color: var(--accent); }
+
+/* add/edit form */
+.sp-form {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.7);
+  z-index: 220;
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.sp-form.hidden { display: none; }
+.sp-form-inner {
+  background: var(--bg-3);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 18px;
+  width: 100%; max-width: 420px;
+}
+.sp-form-inner h3 { margin: 0 0 14px; font-size: 16px; }
+.sp-form-inner label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px; color: var(--text-2);
+  margin-bottom: 12px;
+}
+.sp-form-inner input {
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-family: inherit;
+}
+.sp-form-inner input:focus { outline: none; border-color: var(--accent); }
+.sp-form-foot {
+  display: flex; justify-content: flex-end; gap: 8px;
+  margin-top: 6px;
+}
+.sp-form-foot button {
+  background: var(--bg-2); border: 1px solid var(--line-2); color: var(--text);
+  padding: 9px 16px; border-radius: 8px;
+  font-size: 14px; cursor: pointer;
+}
+.sp-form-foot button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sp-form-foot button:hover { filter: brightness(1.1); }
