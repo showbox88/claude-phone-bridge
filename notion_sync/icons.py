@@ -162,8 +162,25 @@ def icon_for_expense(expense_category) -> dict:
     return _emoji(emoji)
 
 
-def icon_for(collection: str, row: dict) -> dict | None:
-    """Dispatch by collection. Returns None for collections without policy."""
+def icon_for(collection: str, row: dict, *,
+             icon_field: str | None = None,
+             icon_default: str | None = None) -> dict | None:
+    """Resolve a Notion icon for a row.
+
+    For the 6 legacy-supported collections (days/trips/stops/todos/
+    foods/expenses), uses the domain-aware mappings (unchanged) and
+    IGNORES the icon_field / icon_default kwargs.
+
+    For any other collection, falls through to declarative resolution:
+      - if icon_field is set and row[icon_field] is truthy: emit that
+        value as an emoji (truncated to 2 chars to keep payload small)
+      - else if icon_default is set: emit it as an emoji
+      - else: return None
+
+    Phase 5 Task 5: lets new sync targets declare their icon via
+    sync_config.icon_field / icon_default instead of needing a code
+    change here.
+    """
     if collection == "days":
         return icon_for_day()
     if collection == "trips":
@@ -176,4 +193,11 @@ def icon_for(collection: str, row: dict) -> dict | None:
         return icon_for_todo(row)
     if collection == "foods":
         return icon_for_food(row)
+    # Declarative path for un-coded collections (Phase 5 Task 5).
+    if icon_field:
+        v = row.get(icon_field)
+        if v:
+            return _emoji(str(v)[:2])
+    if icon_default:
+        return _emoji(icon_default)
     return None

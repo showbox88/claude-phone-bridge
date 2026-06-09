@@ -168,6 +168,8 @@ def _apply_pb_to_notion(action: PbOnlyChange, *,
                         notion_schema: dict,
                         relation_lookup: dict | None,
                         relation_targets: dict | None,
+                        icon_field: str | None,
+                        icon_default: str | None,
                         pb: PBClient, nc: NotionClient) -> None:
     r = action.pb_row
     props = pb_record_to_notion_props(r, field_types, overrides_inv,
@@ -176,7 +178,9 @@ def _apply_pb_to_notion(action: PbOnlyChange, *,
                                        relation_targets=relation_targets)
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
     page = nc.update_page(action.notion_id, properties=props,
-                          icon=icon_for(collection, r))
+                          icon=icon_for(collection, r,
+                                        icon_field=icon_field,
+                                        icon_default=icon_default))
     pb.update_record(collection, r["id"], {
         "notion_last_edited": page.get("last_edited_time"),
         "last_synced_at": now_iso_datetime(),
@@ -206,6 +210,8 @@ def _apply_pb_new(action: PbNew, *,
                   notion_schema: dict,
                   relation_lookup: dict | None,
                   relation_targets: dict | None,
+                  icon_field: str | None,
+                  icon_default: str | None,
                   pb: PBClient, nc: NotionClient) -> None:
     r = action.pb_row
     props = pb_record_to_notion_props(r, field_types, overrides_inv,
@@ -215,7 +221,9 @@ def _apply_pb_new(action: PbNew, *,
     props["pb_id"] = {"rich_text": [{"type": "text", "text": {"content": r["id"]}}]}
     props["last_synced_at"] = {"date": {"start": now_iso_date()}}
     page = nc.create_page(notion_db_id, props,
-                          icon=icon_for(collection, r))
+                          icon=icon_for(collection, r,
+                                        icon_field=icon_field,
+                                        icon_default=icon_default))
     pb.update_record(collection, r["id"], {
         "notion_id": page["id"],
         "notion_last_edited": page.get("last_edited_time"),
@@ -251,7 +259,9 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
                             title_field: str,
                             notion_schema: dict,
                             relation_lookup: dict | None = None,
-                            relation_targets: dict | None = None) -> int:
+                            relation_targets: dict | None = None,
+                            icon_field: str | None = None,
+                            icon_default: str | None = None) -> int:
     """Apply user-decided Sync Activity rows for this collection.
 
     Reads Sync Activity for rows where:
@@ -287,6 +297,8 @@ def apply_pending_decisions(pb: PBClient, nc: NotionClient, *,
                 notion_schema=notion_schema,
                 relation_lookup=relation_lookup,
                 relation_targets=relation_targets,
+                icon_field=icon_field,
+                icon_default=icon_default,
             )
             nc.update_page(row["id"], properties={
                 "applied_at": {"date": {"start": now_iso_date()}},
@@ -306,7 +318,9 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
                         overrides: dict, overrides_inv: dict,
                         title_field: str, notion_schema: dict,
                         relation_lookup: dict | None = None,
-                        relation_targets: dict | None = None) -> None:
+                        relation_targets: dict | None = None,
+                        icon_field: str | None = None,
+                        icon_default: str | None = None) -> None:
     p = row["properties"]
     decision = (p.get("decision", {}).get("select") or {}).get("name") or ""
     pb_id = "".join(rt.get("plain_text", "") for rt in p.get("pb_id", {}).get("rich_text", []))
@@ -375,7 +389,9 @@ def _apply_one_decision(row: dict, *, pb: PBClient, nc: NotionClient,
         )
         props["last_synced_at"] = {"date": {"start": now_iso_date()}}
         page = nc.update_page(notion_id, properties=props,
-                              icon=icon_for(collection, pb_snap))
+                              icon=icon_for(collection, pb_snap,
+                                            icon_field=icon_field,
+                                            icon_default=icon_default))
         pb.update_record(collection, pb_id, {
             "notion_last_edited": page.get("last_edited_time", ""),
             "last_synced_at": now_iso_datetime(),
@@ -394,6 +410,11 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
     overrides = cfg_row.get("field_map_overrides") or {}
     overrides_inv = {v: k for k, v in overrides.items()}
     last_synced_at = cfg_row.get("last_synced_at") or ""
+    # Declarative icon hints (Phase 5 Task 5). Only consulted by icon_for
+    # for collections WITHOUT a legacy domain mapping. NULL/missing is
+    # safe — legacy collections ignore these entirely.
+    icon_field = cfg_row.get("icon_field") or None
+    icon_default = cfg_row.get("icon_default") or None
 
     field_types = collection_field_types(pb, collection)
     title_field = cfg_row.get("title_field") or ""
@@ -424,6 +445,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
         notion_schema=notion_schema,
         relation_lookup=relation_lookup,
         relation_targets=relation_targets,
+        icon_field=icon_field,
+        icon_default=icon_default,
     )
 
     pb_rows = pb.list_records(collection, sort="")
@@ -462,6 +485,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                                      notion_schema=notion_schema,
                                      relation_lookup=relation_lookup,
                                      relation_targets=relation_targets,
+                                     icon_field=icon_field,
+                                     icon_default=icon_default,
                                      pb=pb, nc=nc)
             elif isinstance(a, NotionOnlyChange):
                 _apply_notion_to_pb(a, collection=collection,
@@ -478,6 +503,8 @@ def sync_collection(cfg_row: dict, pb: PBClient, nc: NotionClient) -> dict:
                                notion_schema=notion_schema,
                                relation_lookup=relation_lookup,
                                relation_targets=relation_targets,
+                               icon_field=icon_field,
+                               icon_default=icon_default,
                                pb=pb, nc=nc)
             elif isinstance(a, NotionNew):
                 _apply_notion_new(a, collection=collection,
