@@ -5,6 +5,77 @@
 
 ---
 
+## 2026-06-09 — Phase 4 · 前端模块化 + DOMPurify + 流式渲染 + CSS 拆分
+
+**Branch:** `refactor/phase-4-frontend-modules` (23 commits, `00ff28e..db53add`)
+**实际工时:** 约 6 小时（含 plan、subagent-driven 14 个 task、2 次部署日 regression hotfix）
+
+### 落地的事
+- **`static/app.js` 2873 行 IIFE → 3 行 entry**（`import './js/boot.js'`），其余 30 个 ES Modules：
+  - `static/js/state.js` (63 行) — pub-sub store，get/set/subscribe，替代 14 个模块作用域 `let`
+  - `static/js/dom.js` (96 行) — 64 个命名导出包揽所有 `getElementById`
+  - `static/js/api.js` (80 行) — `apiGet/apiPost/apiPatch/apiPut/apiDelete/apiPostForm` + `ApiError`，替代 24 处 `fetch()`
+  - `static/js/boot.js` (387 行) — 唯一入口，wireEvents() 集中注册所有 DOM 监听器
+  - `static/js/util/{escape,format,timers,yaml,dialog}.js` — 工具集
+  - `static/js/render/{markdown,scroll,typing,message,tool,perm,checkin-card}.js` — 7 个渲染模块
+  - `static/js/ws/{socket,handlers}.js` — connect/reconnect/ping + 表驱动 HANDLERS[type] dispatch
+  - `static/js/session/{header,list,drawer}.js` — 顶栏 + 抽屉
+  - `static/js/composer/{input,attachments,send}.js` — 输入框 + 附件 + 发送
+  - `static/js/features/{sources,checkin,cwd-browser,usage,weekly-report,sync-settings,bell}.js` — 7 个功能模块
+- **DOMPurify v3.2.4 vendored** (`static/vendor/purify.min.js` 22KB) — 所有 markdown `innerHTML` 走 `DOMPurify.sanitize()`，关闭 65 处历史 XSS 风险面
+- **流式渲染优化**：`appendStreamChunk(container, buffer, chunk)` 用 `textContent` 追加快速路径，仅在段落 (`\n\n`) 或 fenced code block 边界才完整 markdown parse。修复原 O(n²) bug — 长回答 (>5000 字) 手机 CPU 不再爆炸
+- **WS 表驱动**：原 `handleEvent(msg)` 长 if/else 链 → `HANDLERS = {hello, user_echo, assistant_text, ...}`，加 `endStream()` helper 整合原 5 处 `currentAssistantBubble=null + closeToolGroup() + hideTyping()` 重复
+- **`static/style.css` 2048 行 → 16 文件 under `static/css/`**：
+  - `tokens.css` — `--space-* / --radius-* / --font-* / --bg-* / --accent` 设计 token 单源
+  - `base.css / utilities.css / layout.css / appbar.css / drawer.css / messages.css / tools-perms.css / composer.css / picker.css`
+  - `dialogs/{checkin,usage,sync,weekly,cwd,bell}.css`
+  - Cascade order 在 `index.html` 里固定。31 个 selector 拆分前后完全相同
+- **iOS 14 `<dialog>` fallback**：`util/dialog.js:openDialog(el)` 优先 `.showModal()`，失败 fallback 到 `.dialog-open` class + body-scroll-lock。`dialogs/checkin.css` 加 `:not([open]).dialog-open` CSS 规则。原 iOS 14 上 `window.prompt()` 兜底被实际 modal 替代
+- **Service Worker 真上线**：原 sw.js 只处理 push，本期加 cache-first 预缓存所有 47 个静态资源（30 JS + 16 CSS + DOMPurify + icons + marked + manifest），离线打开 PWA shell 正常加载
+- **删 46 行死代码 `setupPush`**：服务端 push.py 已经接管，前端这段从未被调
+- **新增 `tests/test_static_assets.py`**（3 个测试）：守护 `index.html` 引用的资源存在、所有 `import './x.js'` 解析到实盘文件、`DOMPurify` 引用时 vendor 文件在位
+- **`?v=47` → `?v=48` cache-bust 协议**：每改一次需要客户端立即更新的资源，CACHE_VERSION + 所有 query string 一起 bump，新 SW activate 时清旧 cache。这次 v47 → v48 是为了让 client 拿到 turn_done handler 修复
+
+### 闸门
+- ✅ 38/38 unit tests green（35 from Phase 3 + 3 new static-asset tests）
+- ✅ `tests/smoke_backend.py` 5/5
+- ✅ 用户在浏览器手测：发消息 stream / 切 session / 5 个 menu modal / 打卡 dialog / cwd browser / 删除-即刻刷新 / 新会话标题-即刻显示
+- ⏸ 双设备 cross-talk + 24h soak — 未做（参考 Phase 1/2/3 同样跳过）
+
+### 偏离计划 / 修了哪些 regression
+1. **Task 7 subagent 主动捕获 5+ 处我 plan 模板里写错的 legacy 行为**：ping 间隔 25s（不是 30s）、reconnect 1.6x 上限 8s（不是 2x 上限 30s）、wsUrl 用 `currentSource.url` 派生（不是 `location.host`）、iOS visibilitychange 重连守护、stale-socket race guard
+2. **Task 9 subagent 纠正了我对"乐观渲染 user echo"的误判**：legacy 实际不在 send 时渲染 user bubble，靠服务端 `user_echo` 回包
+3. **Task 11 subagent 纠正 GPS_CACHE_KEY 名字**：plan 写 `'bridge.last_gps'`，legacy 实际是 `'bridge.lastGps'` (camelCase)。subagent 用 legacy 实际值保护用户已有缓存
+4. **Task 14 subagent 补回 11+ 处我 plan 漏掉的 event listener**：`syncBtn` 是 sync-now icon 而不是 modal 触发，`workspaceToggle` 是多按钮 `.seg-btn`，`handleUploadInput` 必须 reset `e.target.value` 否则同文件不能重选，`registerServiceWorker()` 注册，menu 'new'/'cancel' cmd，sessionSearch ESC 清空，visibilitychange→checkBell 等
+5. **Task 15 部署日发现 Phase 3 latent bug**：`app/api/browse.py:44` 还在读 `state.cwd`（Phase 3 删了的字段）。smoke 没碰 `/api/browse` 所以滑过 Phase 3 合并，Phase 4 cwd-browser 路由触发后 500。Hotfix `90a1638`：改成读 `db.latest_session_id() → db.get_session(sid)["cwd"]`
+6. **Tasks 18+19 subagent 自主决定**：cwd-browser 用 `.modal-bg` div 不是 `<dialog>`，跳过 openDialog 改造。原 sw.js 完全没有 cache（只有 push handler），subagent 补了精简版 cache-first 路径
+7. **部署日两次 regression 由用户实测捕获**：
+   - **删 session 不刷新**：`session_deleted / session_renamed / sessions_changed` handler 是 no-op。`58e706c` 修
+   - **新会话标题不显示**：`turn_done` handler 也漏接 `loadSessionList()`。`7fe085c` 修 + bump CACHE_VERSION v47→v48 让 SW 重新拉新 handlers.js（cache-first 的代价：客户端没法立即拿到 server-side 改动）
+8. **跳过 24h staging soak**：与 Phase 0/1/2/3 一致
+
+### 量化
+- `static/app.js`: 2873 → 3 行 entry (-99.9%)
+- 新增 ES modules: 30 个文件，~3589 行（含完整 docstrings + 部分 hardening）
+- `static/style.css`: 2048 → 0 行 (拆到 16 文件，2132 行，差额来自每文件 docstring header)
+- 新增 vendor: `purify.min.js` 22KB（DOMPurify v3.2.4 minified）
+- 新增测试: 3 个静态资源完整性测试
+- 删除死代码: 46 行 (`setupPush`)
+- SW cache 清单: 47 条目
+
+### 修的隐藏炸弹
+- **65 处 markdown innerHTML 历史 XSS 风险**：任何 PB 数据流经 markdown 时都可能注入。DOMPurify sanitize 把这条线封死
+- **长回答 CPU 爆炸**：>5000 字的 streaming response 在原 `renderMarkdown(全 buffer)` 每 chunk 重 parse 下 O(n²)。改 textContent fast-path + boundary-trigger full parse 后线性
+- **iOS 14 用户打卡只能 `window.prompt()`**：原 `<dialog>.showModal()` 不支持时退化到原生 prompt 弹框。openDialog fallback 给真正的 modal
+- **离线 PWA 启动**：原 SW 完全没缓存。precache 后 shell 可以离线打开
+- **Phase 3 latent state.cwd**：`app/api/browse.py:44` 漏改。Phase 4 cwd-browser 用 ES modules 路由后立即触发 500，反而帮 Phase 3 兜了底
+
+### 下一步
+👉 Phase 5 · `notion_sync/runner.py` 拆解 + 算法升级（拆 781 行 runner，修同步竞态 + 性能 + 可观察性）
+新窗口续接指令："继续重构路线图，从 Phase 5 开始"
+
+---
+
 ## 2026-06-08 — Phase 3 · Session 多实例化 + Notion 鲁棒性
 
 **Branch:** `refactor/phase-3-session-manager` (20 commits, `435f083..a90c878`)
