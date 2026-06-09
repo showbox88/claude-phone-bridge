@@ -34,6 +34,8 @@ from app.io_utils import read_json_safe, write_json_atomic  # noqa: E402
 from app.paths import DATA_DIR, SYNC_ALERT_STATE  # noqa: E402
 from app.settings import settings  # noqa: E402
 
+import db  # noqa: E402  -- project root is on sys.path (line 32 above)
+
 from notion_sync.activity import (
     frozen_pairs_for_all,
     frozen_pairs_for_collection,
@@ -808,9 +810,6 @@ def notify_pending(nc: NotionClient) -> int:
     md = _render_pending_markdown(rows)
 
     try:
-        # Lazy import — keep runner usable in environments where
-        # the phone-bridge db module isn't already on sys.path.
-        import db  # type: ignore
         # The bridge sqlite path matches server.py's wiring.
         db.init(DATA_DIR / "bridge.db")
         sid = db.create_session(
