@@ -36,6 +36,12 @@ The command prints the full link **once**. Copy it immediately — it cannot be
 recovered from the server later (only a sha256 hash is stored). The old link
 dies the moment you rotate.
 
+The running service does **not** need a restart: `AuthState` watches the auth
+file's `(mtime, size)` and reloads when the CLI (a separate process) writes it,
+so the new link is live within one request and the server's own writes never
+clobber it. (Historically this required stopping the service first; that
+workaround is no longer needed.)
+
 If the printed base host is wrong (e.g. you are testing behind a different
 proxy), set `BRIDGE_PUBLIC_URL` in `.env` before running:
 

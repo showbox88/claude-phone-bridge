@@ -168,3 +168,43 @@ def test_super_link_path_injection_is_escaped(tmp_path, monkeypatch):
     assert r.status_code == 200
     assert "<script>alert(1)" not in r.text          # not reflected raw
     assert "&lt;script&gt;alert(1)" in r.text         # escaped instead
+
+
+def test_server_sees_external_super_link_without_restart(tmp_path):
+    """A super link minted by a SEPARATE process (the CLI) must be honoured by
+    a long-lived server instance without restarting it."""
+    path = tmp_path / ".bridge_auth.json"
+    server = auth_mod.AuthState(path)
+    server.initialize("correct horse battery staple")
+    cli = auth_mod.AuthState(path)          # separate process / instance
+    secret = cli.set_super_link()
+    assert server.verify_super_link(secret) is True
+    assert server.has_super_link() is True
+
+
+def test_server_device_write_does_not_clobber_external_super_link(tmp_path):
+    """The server's debounced last_seen write must not overwrite a super link
+    that a separate process wrote to the same file (the original clobber bug)."""
+    path = tmp_path / ".bridge_auth.json"
+    server = auth_mod.AuthState(path)
+    server.initialize("correct horse battery staple")
+    tok = server.issue_device_token("dev1", ip="1.1.1.1")
+    cli = auth_mod.AuthState(path)
+    secret = cli.set_super_link()
+    server._last_seen_persisted.clear()     # force the debounced persist to fire
+    server.lookup_token(tok, ip="2.2.2.2")  # server writes the file
+    fresh = auth_mod.AuthState(path)
+    assert fresh.verify_super_link(secret) is True   # survived, not clobbered
+
+
+def test_external_device_enrollment_not_clobbered_by_set_super_link(tmp_path):
+    """Reverse direction: the CLI's set_super_link must not drop a device the
+    server enrolled after the CLI instance was constructed."""
+    path = tmp_path / ".bridge_auth.json"
+    server = auth_mod.AuthState(path)
+    server.initialize("correct horse battery staple")
+    cli = auth_mod.AuthState(path)          # loads state (no devices yet)
+    tok = server.issue_device_token("dev1")  # server adds a device afterwards
+    cli.set_super_link()                      # must merge, not clobber the device
+    fresh = auth_mod.AuthState(path)
+    assert fresh.lookup_token(tok) is not None

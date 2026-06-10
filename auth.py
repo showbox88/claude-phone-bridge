@@ -62,6 +62,11 @@ class AuthState:
         self.path = Path(path)
         self.lock = Lock()
         self.data = self._load()
+        # (mtime_ns, size) of the file as we last read/wrote it. Used to notice
+        # when a SEPARATE process (the `app.auth.cli` SSH tool) edited the file,
+        # so this long-lived server reloads instead of clobbering that edit with
+        # its stale in-memory copy.
+        self._sig = self._file_sig()
         # In-memory: ip -> [unix_ts of failures]
         self.failures: dict[str, list[float]] = {}
         # In-memory: token_hash -> last persisted last_seen
@@ -84,6 +89,29 @@ class AuthState:
             os.chmod(self.path, 0o600)
         except OSError:
             pass
+        # Record our own write so _reload_if_changed doesn't treat it as external.
+        self._sig = self._file_sig()
+
+    def _file_sig(self) -> Optional[tuple]:
+        """(mtime_ns, size) of the auth file, or None if it doesn't exist."""
+        try:
+            st = self.path.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def _reload_if_changed(self) -> None:
+        """Reload from disk if a separate process changed the file.
+
+        Caller MUST hold self.lock. This is what lets the server pick up a
+        super link minted by `app.auth.cli` (a separate process) without a
+        restart, and stops the server's own saves from overwriting that edit
+        with a stale in-memory copy (the previous clobber bug).
+        """
+        sig = self._file_sig()
+        if sig is not None and sig != self._sig:
+            self.data = self._load()
+            self._sig = sig
 
     # ---- initialization -------------------------------------------------
     def is_initialized(self) -> bool:
@@ -130,6 +158,8 @@ class AuthState:
         token = secrets.token_urlsafe(32)
         h = _hash_token(token)
         with self.lock:
+            self._reload_if_changed()
+            self.data.setdefault("devices", {})
             self.data["devices"][h] = {
                 "name": name or "unnamed device",
                 "added_at": _now(),
@@ -149,13 +179,15 @@ class AuthState:
         if not token:
             return None
         h = _hash_token(token)
-        d = self.data.get("devices", {}).get(h)
-        if not d:
-            return None
         now = _now()
         last_persisted = self._last_seen_persisted.get(h, 0)
-        if now - last_persisted >= LAST_SEEN_DEBOUNCE_SEC:
-            with self.lock:
+        should_persist = now - last_persisted >= LAST_SEEN_DEBOUNCE_SEC
+        with self.lock:
+            self._reload_if_changed()
+            d = self.data.get("devices", {}).get(h)
+            if not d:
+                return None
+            if should_persist:
                 d["last_seen"] = now
                 if ip:
                     d["last_ip"] = ip
@@ -163,10 +195,11 @@ class AuthState:
                     d["last_ua"] = ua[:200]
                 self._save_locked()
                 self._last_seen_persisted[h] = now
-        return {**d, "hash": h}
+            return {**d, "hash": h}
 
     def revoke(self, token_hash: str) -> bool:
         with self.lock:
+            self._reload_if_changed()
             removed = self.data.get("devices", {}).pop(token_hash, None)
             if removed is not None:
                 self._save_locked()
@@ -178,7 +211,9 @@ class AuthState:
 
     # ---- super link (hidden auth gate) ----------------------------------
     def has_super_link(self) -> bool:
-        return bool(self.data.get("super_link_hash"))
+        with self.lock:
+            self._reload_if_changed()
+            return bool(self.data.get("super_link_hash"))
 
     def set_super_link(self) -> str:
         """Mint a fresh super-link secret, store only its hash, return plaintext.
@@ -187,13 +222,18 @@ class AuthState:
         """
         secret = secrets.token_urlsafe(36)  # ~48 url-safe chars
         with self.lock:
+            self._reload_if_changed()  # merge concurrent edits (e.g. new devices)
             self.data["super_link_hash"] = _hash_token(secret)
             self._save_locked()
         return secret
 
     def verify_super_link(self, candidate: str) -> bool:
-        stored = self.data.get("super_link_hash")
-        if not stored or not candidate:
+        if not candidate:
+            return False
+        with self.lock:
+            self._reload_if_changed()  # pick up a link minted by the CLI, no restart
+            stored = self.data.get("super_link_hash")
+        if not stored:
             return False
         return hmac.compare_digest(stored, _hash_token(candidate))
 
