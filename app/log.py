@@ -41,6 +41,11 @@ def configure(level: int = logging.INFO) -> None:
     structlog.configure(
         processors=[
             structlog.stdlib.add_log_level,
+            # Interpolate %s/%d positional args into the event string,
+            # so `log.info("PB token refreshed (len=%d)", 223)` renders
+            # as event="PB token refreshed (len=223)" rather than
+            # storing args in a separate positional_args field.
+            structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             _inject_contextvars,
             structlog.processors.JSONRenderer(ensure_ascii=False),
