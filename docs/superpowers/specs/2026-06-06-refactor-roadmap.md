@@ -39,16 +39,16 @@
 | 2 拆包 | ✅ 已合并 | `refactor/phase-2-app-package` | 2026-06-07 | `9f0f9ff` | CHANGELOG §Phase 2 |
 | 3 Session 多实例 | ✅ 已合并 | `refactor/phase-3-session-manager` | 2026-06-08 | `cf9664c` | CHANGELOG §Phase 3 |
 | 4 前端 | ✅ 已合并 | `refactor/phase-4-frontend-modules` | 2026-06-09 | `1709d46` | CHANGELOG §Phase 4 |
-| 5 sync | ⏳ 待开始 | `refactor/phase-5-sync-runner` | — | — | — |
+| 5 sync | ✅ 已合并 | `refactor/phase-5-sync-runner` | 2026-06-09 | `5166a8f` | CHANGELOG §Phase 5 |
 | 6 收尾 | ⏳ 待开始 | `refactor/phase-6-polish` | — | — | — |
 
 **状态图例**：⏳ 待开始 · 🚧 进行中 · ⏸ 暂停 · ✅ 已合并 · ❌ 回滚
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase 5 · `notion_sync/runner.py` 拆解 + 算法升级（拆 781 行 runner，修同步竞态 + 性能 + 可观察性）
+👉 **下一步执行**：Phase 6 · 收尾（测试补齐 + structlog + contextvars / CSRF + cookie SameSite / Origin 校验 / 文档清理）
 
-Phase 4 已 merge 到 main（`1709d46`），用户手测全流程通过（含两次部署日 regression 修复：session list refresh + Phase 3 latent state.cwd）。
+Phase 5 已 merge 到 main（`5166a8f`），E2E 5 天对话仿真用真实数据验证 race fix + 同步全路径，0 错误。
 下次开新窗口直接说"继续重构路线图"或贴这一行即可。
 
 ---
