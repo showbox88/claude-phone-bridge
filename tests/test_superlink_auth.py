@@ -144,3 +144,15 @@ def test_health_stays_public(tmp_path, monkeypatch):
     app, st = _app_with_state(tmp_path, monkeypatch)
     client = TestClient(app, follow_redirects=False)
     assert client.get("/api/health").status_code == 200
+
+
+def test_cli_rotate_link_sets_verifiable_secret(tmp_path, monkeypatch, capsys):
+    st = _fresh_state(tmp_path)
+    import app.auth.cli as cli
+    monkeypatch.setattr(cli, "auth_state", st, raising=False)
+    cli.main(["rotate-link"])
+    out = capsys.readouterr().out.strip()
+    # the printed secret (last whitespace token containing '/') verifies
+    printed = [w for line in out.splitlines() for w in line.split() if "/" in w]
+    secret = printed[-1].rsplit("/", 1)[-1]
+    assert st.verify_super_link(secret) is True
