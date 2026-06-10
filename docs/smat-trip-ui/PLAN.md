@@ -131,14 +131,16 @@
 - [ ] journal 摘要展示 → **推迟**：现有 UI 没有日记插槽，需要新组件，并入 3b 一起做（数据层 fetch 很快，先不加死重）
 - **验收**：你手机上实际浏览一遍（Dashboard 卡片图标/封面/费用、DayPage 各分类图标、相册），确认显示对、无报错
 
-### Phase 3b — 完整写支持（2 天，在 3a 跑稳之后）
-逐个开启（每开一个先在测试副本演练）：
-- [ ] Day：改 note/color；stop 排序（加 planned_at 字段）
-- [ ] Stop：新建（含 locations 去重——按 google_place_id/osm_id/名称+坐标）、改名/备注/时间、删除；stop_type/meta 字段补齐（酒店/交通卡）
-- [ ] 新建地点时 Google 图片由代理下载缓存到 `media/locations/<id>/`（不存带 key 的外链）
-- [ ] Trip：改标题/日期/状态/封面（thumb 路径走 /media），新建行程，把天挂进行程（day.trip）
-- **验收**：UI 改一条 → phone-bridge 里能看到；phone-bridge 记一条 → UI 刷新可见；下一轮 Notion 同步无冲突堆积
-- **回滚**：`VITE_PB_WRITES` 开关随时退回 3a 范围或全只读
+### Phase 3b — 完整写支持 🚀 已上线（2026-06-10），待验收
+- [x] Day：懒创建（首次写入时建，浏览不建）；标题→name、颜色→color（新字段）
+- [x] Stop：新建（locations 去重 google_place_id > 名称，老记录回填 place_id）、改名、计划时间→planned_at（新字段，与打卡时间分离，显示优先级 checkin > planned_at > reserved）、删除（前轮已做）；stop_type(7 种卡片) + meta(json) 新字段——**酒店住宿/交通卡等差异化字段经 meta 完整往返，刷新不再丢**
+- [x] Google 图片：`GET /media/cache` 服务端下载缓存（仅 https + Google 域白名单 + 重定向校验，防 SSRF）；新建 stop 和换图都自动走缓存
+- [x] Trip：新建/改标题/日期/状态（UI 三态↔PB 五态映射）/封面（thumb→trips.photos[0]）/删除（不连带 days）/把天挂进行程（day.trip 直写）
+- [x] schema：days.color / stops.{stop_type,planned_at,meta} / locations.google_place_id（快照 data-20260610-1648-pre-3b 先行；Day DB 撞名检查通过）
+- [x] 服务端验证：trip 建/改状态/删全 200；cache 端点 44KB 落盘；SSRF 拒绝；静态出图不受影响
+- [ ] journal 摘要展示（仍欠，需小 UI 组件，不阻塞）
+- [ ] **验收（待你真机）**：规划一个未来日期的行程（新日期加地点/排时间/酒店卡）→ 刷新确认都在 → phone-bridge 里能看到；次日 Notion 同步无冲突
+- **回滚**：`VITE_PB_WRITES` 开关随时退回只读
 
 ### Phase 4 — media 备份 + 收尾（部分完成 2026-06-10）
 - [x] media 备份：`smat-trip-media-backup.timer` 每天 02:00 rsync `/home/dev/smat-trip/media/` → CT 103 `/var/lib/pb-replica/media/`（复用 litestream SSH key，Persistent 补跑）；首跑已验证 4 张照片落地。**TODO 后续**：并入 CT 103 周归档加密上 Oracle
