@@ -5,8 +5,12 @@ from any phone or laptop. Deployed on `dashboard-server` (192.168.1.168 on LAN,
 `100.81.67.15` on the tailnet) at `https://dashboard-server.tail4cfa2.ts.net/`.
 
 Listens on `127.0.0.1:8001` inside the VM. Tailscale Serve reverse-proxies
-HTTPS in front of it. Authentication is implicit: only devices logged into the
-user's Tailscale account can reach the URL.
+HTTPS in front of it. Authentication: the public surface returns a generic `503` decoy to everything
+unauthenticated — no login page, no hint the service exists. The only login
+door is a secret **super link** (a high-entropy URL) that gates a password +
+TOTP form; passing it enrols the device (90-day sliding cookie). Manage/rotate
+the link over SSH: `.venv/bin/python -m app.auth.cli rotate-link`. See
+[docs/operations/superlink-runbook.md](docs/operations/superlink-runbook.md).
 
 ## Refactor period rules (active 2026-06-06 onwards)
 
