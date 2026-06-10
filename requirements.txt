@@ -46,10 +46,6 @@ claude-agent-sdk==0.2.87
     # via -r requirements.in
 click==8.4.1
     # via uvicorn
-colorama==0.4.6
-    # via
-    #   click
-    #   uvicorn
 cryptography==48.0.0
     # via
     #   -r requirements.in
@@ -170,12 +166,6 @@ python-multipart==0.0.32
     # via mcp
 pywebpush==2.3.0
     # via -r requirements.in
-pywin32==312 ; sys_platform == 'win32'
-    # via mcp
-    # NOTE: marker added manually after pip-compile — pip-compile strips
-    # platform markers when compiled on Windows; pywin32 is win32-only and
-    # breaks Linux installs without the conditional. Re-add this marker if
-    # you re-compile the lockfile from a Windows host.
 pyyaml==6.0.3
     # via uvicorn
 referencing==0.37.0
@@ -204,6 +194,8 @@ starlette==1.2.1
     #   fastapi
     #   mcp
     #   sse-starlette
+structlog==25.5.0
+    # via -r requirements.in
 timezonefinder==8.2.4
     # via -r requirements.in
 typing-extensions==4.15.0
@@ -231,6 +223,8 @@ uvicorn==0.46.0
     # via
     #   -r requirements.in
     #   mcp
+uvloop==0.22.1
+    # via uvicorn
 watchfiles==1.2.0
     # via uvicorn
 websockets==16.0

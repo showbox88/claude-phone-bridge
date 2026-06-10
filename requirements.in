@@ -33,3 +33,6 @@ google-api-python-client>=2.130
 
 # Timezone resolution from GPS coordinates (offline polygon lookup)
 timezonefinder>=6.5
+
+# Structured logging (Phase 6a)
+structlog~=25.0
