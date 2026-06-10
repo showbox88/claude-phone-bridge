@@ -14,15 +14,19 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 import auth as auth_mod
 
 from app.auth.state import _COOKIE_SECONDS, auth_state
-from app.auth.views import _page, _ua_short
+from app.auth.views import _html_escape, _page, _ua_short
 
 
 def _form(path: str, *, error: str = "") -> HTMLResponse:
+    # The middleware matches the super link on the FIRST path segment only, so
+    # `path` can carry attacker-controlled trailing junk (e.g. /<secret>/"><script>).
+    # Escape it before reflecting into the form action to prevent reflected XSS.
+    safe_action = _html_escape(path)
     err = f'<p class="error">{error}</p>' if error else ""
     return _page("Sign in", f"""
 <h1>Sign in</h1>
 <p class="sub">Enter password and the 6-digit code from your authenticator.</p>
-<form method="post" action="{path}">
+<form method="post" action="{safe_action}">
   <label for="password">Password</label>
   <input id="password" name="password" type="password" required autofocus autocomplete="current-password">
   <label for="code">6-digit code</label>

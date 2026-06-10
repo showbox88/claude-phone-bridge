@@ -156,3 +156,15 @@ def test_cli_rotate_link_sets_verifiable_secret(tmp_path, monkeypatch, capsys):
     printed = [w for line in out.splitlines() for w in line.split() if "/" in w]
     secret = printed[-1].rsplit("/", 1)[-1]
     assert st.verify_super_link(secret) is True
+
+
+def test_super_link_path_injection_is_escaped(tmp_path, monkeypatch):
+    """A crafted /<secret>/"><script> path must not reflect unescaped into the
+    gate form action (the middleware matches on the first segment only)."""
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    secret = st.set_super_link()
+    client = TestClient(app, follow_redirects=False)
+    r = client.get(f'/{secret}/"><script>alert(1)</script>')
+    assert r.status_code == 200
+    assert "<script>alert(1)" not in r.text          # not reflected raw
+    assert "&lt;script&gt;alert(1)" in r.text         # escaped instead

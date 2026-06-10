@@ -124,11 +124,16 @@ Any request that does not carry a valid session cookie receives:
 
 ```
 HTTP/1.1 503 Service Temporarily Unavailable
+Retry-After: 120
 Content-Type: text/html
 
-<html><body><h1>503 Service Temporarily Unavailable</h1>
-<p>The service is temporarily unavailable. Please try again later.</p>
-</body></html>
+<html>
+<head><title>503 Service Temporarily Unavailable</title></head>
+<body>
+<center><h1>503 Service Temporarily Unavailable</h1></center>
+<hr><center>nginx</center>
+</body>
+</html>
 ```
 
 The following paths are **exempted** from the decoy and always respond
