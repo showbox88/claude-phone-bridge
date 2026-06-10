@@ -256,6 +256,11 @@ The runtime injects `Current user timezone: <IANA>` into your prompt every turn.
 When writing rows that have a `timezone` column (locations, stops, days, expenses,
 foods) or `todos.due_at`/`due_tz`, follow this rule:
 
+> **硬性要求（2026-06-10 加强）：对这些表的每一次 create / update，`timezone`
+> 一律必填，绝不允许留空。** 哪怕完全没有线索，也必须写 runtime 注入的
+> `Current user timezone`。实测教训：漏写 timezone 会让 Smart Trip UI 把
+> checkin 时间显示错好几个小时（UI 端读不到时区只能猜）。
+
 1. **Resolve target date first.** "明天" = today's date in the runtime tz, +1.
 2. **Pick the tz for the target date in this priority:**
    a. The stop(s) on that date (`stop.timezone`).
@@ -265,8 +270,10 @@ foods) or `todos.due_at`/`due_tz`, follow this rule:
 3. **Compose `due_at` (UTC).** Local datetime in step-2 tz → convert to UTC via
    `zoneinfo`. Store as ISO `YYYY-MM-DDTHH:MM:SSZ`.
 4. **Store `due_tz`.** Save the IANA name you used (e.g. `Asia/Tokyo`).
-5. **For non-reminder rows** (creating a stop/expense/food), just set the row's
-   `timezone` column following the same fallback. Don't write `due_at` on those.
+5. **For non-reminder rows** (creating a stop/expense/food/day), ALWAYS set the
+   row's `timezone` column following the same fallback — this is mandatory, not
+   optional; the minimum acceptable value is the runtime `Current user timezone`.
+   Don't write `due_at` on those.
 
 Example: user is in Paris (runtime tz = `Europe/Paris`), says "after-tomorrow
 6 PM dinner in Tokyo", and a Tokyo stop already exists for that date. Write
