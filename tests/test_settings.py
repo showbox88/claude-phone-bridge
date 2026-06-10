@@ -51,7 +51,7 @@ def test_defaults():
     s = _build_settings({})
     assert s.host == "127.0.0.1"
     assert s.port == 8000
-    assert s.bridge_cookie_days == 30
+    assert s.bridge_cookie_days == 90
     assert s.pocketbase_url == ""
     assert s.allowed_origins == "*"
 
@@ -70,6 +70,12 @@ def test_int_coercion():
 def test_pocketbase_url_strips_trailing_slash():
     s = _build_settings({"POCKETBASE_URL": "http://127.0.0.1:8090/"})
     assert s.pocketbase_url == "http://127.0.0.1:8090"
+
+
+def test_cookie_days_default_is_90():
+    from app.settings import Settings
+    s = Settings(_env_file=None)
+    assert s.bridge_cookie_days == 90
 
 
 if __name__ == "__main__":

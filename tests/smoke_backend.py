@@ -116,6 +116,17 @@ async def main():
     hello = await _ws_roundtrip()
     _ok(f"(session={str(hello.get('session_id', '?'))[:8]}...)")
 
+    _step("GET / without cookie -> decoy 503")
+    req = urllib.request.Request(BASE + "/", method="GET")  # no Cookie header
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            code = r.status
+    except urllib.error.HTTPError as e:
+        code = e.code
+    if code != 503:
+        _fail(f"unauthed / expected 503 decoy, got {code}")
+    _ok()
+
     print()
     print("OK: all smoke checks passed")
 

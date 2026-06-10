@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     default_cwd: str = ""
     allowed_origins: str = "*"
     bridge_auth_file: str = ""
-    bridge_cookie_days: int = 30
+    bridge_cookie_days: int = 90
     bridge_name: str = ""
     bridge_data_dir: str = ""
 

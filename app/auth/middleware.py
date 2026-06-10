@@ -1,50 +1,49 @@
-"""HTTP auth middleware + supporting predicates.
+"""HTTP auth middleware — three outcomes, no hints.
 
-Public routes (login/setup/static/known service-discovery endpoints) bypass
-auth entirely. Everything else requires a valid `bridge_session` cookie. If
-auth isn't initialized yet, HTML clients get redirected to `/setup`; JSON
-clients get a 503. If unauthed, HTML → `/login` redirect; JSON → 401.
+Every request resolves to exactly one of:
+  1. Always-public infra path (/api/health, OAuth well-known) → pass through.
+  2. First path segment matches the super-link secret → dispatch to the gate
+     (app.auth.gate.superlink_gate). The secret IS the path; there is no
+     telltale /login or /setup URL visible to outside observers.
+  3. Valid device cookie → real app, with sliding-cookie refresh.
+  4. Everything else → misleading nginx-style 503 decoy. No redirect, no
+     login form, no hint that Phone Bridge or any auth system exists here.
 
-Cookie sliding expiry: every authed response re-stamps the cookie for
-another `_COOKIE_SECONDS` window.
+`_current_device` is a stable public helper imported by app.auth.pages and
+app.api.meta — its name, location, and signature must remain unchanged.
 """
 from __future__ import annotations
 
 from fastapi import Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import Response
 
 import auth as auth_mod
 
+from app.auth.gate import superlink_gate
 from app.auth.state import _COOKIE_SECONDS, auth_state
 
-_PUBLIC_PREFIXES = ("/login", "/logout", "/setup", "/static/")
+# Only these stay reachable WITHOUT a device cookie:
+#  - /api/health: the deploy tool health-checks it over the public Funnel URL.
+#  - the two RFC well-known OAuth paths: claude.ai's connector probes them
+#    unauthenticated during OAuth discovery for the sibling mcp_pb service.
 _PUBLIC_EXACT = {
-    "/sw.js", "/manifest.json", "/icon.svg",
-    "/api/health", "/api/vapid-public-key",
-    # RFC 9728 OAuth protected-resource metadata for the mcp_pb sibling service.
-    # Phone-bridge owns the root-path Tailscale Funnel mapping; mcp_pb's
-    # public URL is /mcp on the same hostname. claude.ai's connector probes
-    # this well-known URL during OAuth discovery before doing DCR.
+    "/api/health",
     "/.well-known/oauth-protected-resource/mcp",
-    # RFC 8414 path-suffixed authorization-server metadata. claude.ai's
-    # connector tries this URL (not /mcp/.well-known/...) to find OAuth endpoints.
     "/.well-known/oauth-authorization-server/mcp",
 }
 
-
-def _is_public(path: str) -> bool:
-    if path in _PUBLIC_EXACT:
-        return True
-    for p in _PUBLIC_PREFIXES:
-        base = p.rstrip("/")
-        if path == base or path.startswith(base + "/"):
-            return True
-    return False
+# Generic nginx-style 503 — misdirects scanners toward "backend is down",
+# revealing nothing about Phone Bridge or that an auth system exists here.
+_DECOY_BODY = (
+    b"<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n"
+    b"<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n"
+    b"<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+)
 
 
-def _wants_html(request: Request) -> bool:
-    accept = request.headers.get("accept", "")
-    return "text/html" in accept and "application/json" not in accept
+def decoy_response() -> Response:
+    return Response(content=_DECOY_BODY, status_code=503,
+                    media_type="text/html", headers={"Retry-After": "120"})
 
 
 def _current_device(request: Request) -> dict | None:
@@ -60,25 +59,26 @@ def _current_device(request: Request) -> dict | None:
 
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    if _is_public(path):
+
+    # 1. Always-public infra (health + OAuth discovery).
+    if path in _PUBLIC_EXACT:
         return await call_next(request)
 
-    # Not initialized yet → force first-time setup
-    if not auth_state.is_initialized():
-        if _wants_html(request):
-            return RedirectResponse("/setup", status_code=303)
-        return JSONResponse({"error": "not initialized"}, status_code=503)
+    # 2. The hidden gate: first path segment matches the super-link secret.
+    #    The secret IS the path — there is no telltale auth path.
+    seg = path.lstrip("/").split("/", 1)[0]
+    if seg and auth_state.verify_super_link(seg):
+        return await superlink_gate(request)
 
+    # 3. Trusted device → the real app, with sliding-cookie refresh.
     device = _current_device(request)
-    if device is None:
-        if _wants_html(request):
-            return RedirectResponse("/login", status_code=303)
-        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    if device is not None:
+        request.state.device = device
+        response = await call_next(request)
+        token = request.cookies.get(auth_mod.COOKIE_NAME)
+        if token:
+            auth_mod.set_session_cookie(response, token, max_age=_COOKIE_SECONDS)
+        return response
 
-    request.state.device = device
-    response = await call_next(request)
-    # Sliding expiry: every authed request renews the cookie for another N days.
-    token = request.cookies.get(auth_mod.COOKIE_NAME)
-    if token:
-        auth_mod.set_session_cookie(response, token, max_age=_COOKIE_SECONDS)
-    return response
+    # 4. Everything else → misleading decoy. No redirect, no login form, no hint.
+    return decoy_response()

@@ -25,6 +25,7 @@ a temporary lockout (cleared on first window expiry).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -69,11 +70,11 @@ class AuthState:
     # ---- persistence -----------------------------------------------------
     def _load(self) -> dict:
         if not self.path.exists():
-            return {"password_hash": None, "totp_secret": None, "devices": {}}
+            return {"password_hash": None, "totp_secret": None, "devices": {}, "super_link_hash": None}
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except Exception:
-            return {"password_hash": None, "totp_secret": None, "devices": {}}
+            return {"password_hash": None, "totp_secret": None, "devices": {}, "super_link_hash": None}
 
     def _save_locked(self) -> None:
         tmp = self.path.with_suffix(".tmp")
@@ -174,6 +175,27 @@ class AuthState:
     def list_devices(self) -> list[dict]:
         with self.lock:
             return [{"hash": k, **v} for k, v in self.data.get("devices", {}).items()]
+
+    # ---- super link (hidden auth gate) ----------------------------------
+    def has_super_link(self) -> bool:
+        return bool(self.data.get("super_link_hash"))
+
+    def set_super_link(self) -> str:
+        """Mint a fresh super-link secret, store only its hash, return plaintext.
+
+        Rotating (calling again) invalidates the previous link immediately.
+        """
+        secret = secrets.token_urlsafe(36)  # ~48 url-safe chars
+        with self.lock:
+            self.data["super_link_hash"] = _hash_token(secret)
+            self._save_locked()
+        return secret
+
+    def verify_super_link(self, candidate: str) -> bool:
+        stored = self.data.get("super_link_hash")
+        if not stored or not candidate:
+            return False
+        return hmac.compare_digest(stored, _hash_token(candidate))
 
     # ---- rate limit ------------------------------------------------------
     def can_attempt(self, ip: str) -> tuple[bool, int]:
