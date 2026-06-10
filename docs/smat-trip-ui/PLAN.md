@@ -124,13 +124,12 @@
 - [x] 服务端验证：经 :8451 免登录代理实测 stop PATCH（checkin+photos）、expense create/delete 全部成功并已还原
 - [x] **验收（2026-06-10 真机演练通过）**：双向全通——phone-bridge 建的 stop 在 UI 打卡/传照片/记账 ✅；UI 附近打卡新建 stop（含 locations 复用、checkin、Google 图片）✅。过程中修了 4 个问题：photo picker 的 placeId 闸门、空时区显示成 UTC、新建 stop 被 3b 跳过、ExpenseModal 覆盖 stop 备注（已改为只填空）。Notion 端待次日 03:00 同步后顺带确认
 
-### Phase 2 — 读适配完善（1 天，3a 之后做）
-- [ ] categories/stop_type → UI 卡片类型与图标完整映射（含酒店线、交通卡）
-- [ ] expenses → Dashboard 预算汇总、stop 卡片费用、ExpenseModal 只读展示
-- [ ] photos(json 外链 + 新 file 字段) → StopImage / 相册 / Lightbox
-- [ ] journal 关联 → DayPage 显示当天日记摘要（只读）
-- [ ] trips.photos json → 行程相册
-- **验收**：你手机上实际浏览一遍西班牙行程，逐页确认显示对、无报错
+### Phase 2 — 读适配完善 🚀 已上线（2026-06-10），待浏览验收
+- [x] categories → 图标映射：PB 中文分类喂给现有映射表（本来就支持中文），补了 打卡/体验/笔记/超市 四个关键词。酒店线/交通卡的"卡片形态还原"需要 stop_type/meta 字段，归 3b
+- [x] expenses → TripCard 预算合计、stop 卡片费用、ExpenseModal 显示（3a 已通）
+- [x] photos → stop 照片兜底 location.photos（Notion 外链）；行程相册收全部 stop 照片 + trips.photos；行程封面用第一张照片（不再永远默认图）
+- [ ] journal 摘要展示 → **推迟**：现有 UI 没有日记插槽，需要新组件，并入 3b 一起做（数据层 fetch 很快，先不加死重）
+- **验收**：你手机上实际浏览一遍（Dashboard 卡片图标/封面/费用、DayPage 各分类图标、相册），确认显示对、无报错
 
 ### Phase 3b — 完整写支持（2 天，在 3a 跑稳之后）
 逐个开启（每开一个先在测试副本演练）：
@@ -141,10 +140,10 @@
 - **验收**：UI 改一条 → phone-bridge 里能看到；phone-bridge 记一条 → UI 刷新可见；下一轮 Notion 同步无冲突堆积
 - **回滚**：`VITE_PB_WRITES` 开关随时退回 3a 范围或全只读
 
-### Phase 4 — media 备份 + 收尾（半天）
-- [ ] `/home/dev/smat-trip/media/` 备份：加 systemd timer，每天 rsync 到 CT 103（与 PB 副本同机），或并入周归档脚本一起加密上传 Oracle
-- [ ] `app_settings` collection + 主题/语言持久化（UI 偏好不再依赖 Supabase）
-- [ ] 文档：本仓库 ARCHITECTURE.md 增补 PB 模式章节；infrastructure 仓库更新 dashboard-server.md（media 路径/备份/上传端点）
+### Phase 4 — media 备份 + 收尾（部分完成 2026-06-10）
+- [x] media 备份：`smat-trip-media-backup.timer` 每天 02:00 rsync `/home/dev/smat-trip/media/` → CT 103 `/var/lib/pb-replica/media/`（复用 litestream SSH key，Persistent 补跑）；首跑已验证 4 张照片落地。**TODO 后续**：并入 CT 103 周归档加密上 Oracle
+- [ ] `app_settings` collection → **推迟**：主题/语言目前 localStorage 单设备保存够用，等需要跨设备同步偏好再做
+- [x] 文档：phone-bridge 仓库 `docs/smat-trip-ui/`（README/ARCHITECTURE/PLAN）已建并推送；infrastructure dashboard-server.md 已更新（服务表 + Serve 表 + 备份表）
 - [ ] 视情况：`feature/pb-datasource` 是否转正为长期分支（**不动 main 的原则不变**，建议长期双轨：main=Supabase 演示版，pb 分支=自用版）
 
 ### Phase 5 — Notion 映射上线（半天，3a/3b 跑稳之后）
