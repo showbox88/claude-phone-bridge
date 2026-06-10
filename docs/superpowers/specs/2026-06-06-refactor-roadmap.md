@@ -41,18 +41,30 @@
 | 4 前端 | ✅ 已合并 | `refactor/phase-4-frontend-modules` | 2026-06-09 | `1709d46` | CHANGELOG §Phase 4 |
 | 5 sync | ✅ 已合并 | `refactor/phase-5-sync-runner` | 2026-06-09 | `5166a8f` | CHANGELOG §Phase 5 |
 | 6a 测试 + structlog | ✅ 已合并 | `refactor/phase-6a-tests-structlog` | 2026-06-10 | `0120af5` | CHANGELOG §Phase 6a |
-| 6b auth 安全 | ⏳ 待开始 | `refactor/phase-6b-auth-hardening` | — | — | — |
-| 6c OTel + req_id | ⏳ 待开始 | `refactor/phase-6c-observability` | — | — | — |
+| 6b auth 安全 | ❌ 不做（2026-06-10 决定）| — | — | — | 见下方"不做"理由 |
+| 6c OTel + req_id | ❌ 不做（2026-06-10 决定）| — | — | — | 见下方"不做"理由 |
 
-**状态图例**：⏳ 待开始 · 🚧 进行中 · ⏸ 暂停 · ✅ 已合并 · ❌ 回滚
+**状态图例**：⏳ 待开始 · 🚧 进行中 · ⏸ 暂停 · ✅ 已合并 · ❌ 回滚 / 不做
 
-### 下一步入口
+### 路线图收尾（2026-06-10）
 
-👉 **下一步执行**：Phase 6b · auth 安全收尾（CSRF 双提交 / cookie SameSite=Strict / Origin 校验）—— 每项 acceptance 先讨论再动 auth 代码
+**重构路线图正式完成。** 8 个阶段（Phase -1 到 6a）全部 merge 到 main，覆盖：护栏 / 地基 / PB 统一 / 拆包 / Session 多实例 / 前端模块化 / sync race fix + perf / 测试 + structlog。
 
-Phase 6a 已 merge（`0120af5`，243/243 测试，JSON 日志接通）。
-6b 需注意：今日 super-link 模型（commits `af00f8f..20e3215`）是数据安全要害，必须保持原样。
-下次开新窗口直接说"继续重构路线图，从 Phase 6b 开始"或贴这一行即可。
+**6b（CSRF + SameSite=Strict + Origin 校验）和 6c（OTel + request_id）经评估决定不做**，理由：
+
+1. **真正的 auth 边界是 Tailscale tailnet** —— `CLAUDE.md` 明文 `ALLOWED_ORIGINS=*`，只有用户自己的设备能路由到 `dashboard-server.tail4cfa2.ts.net`
+2. **今日 super-link 模型已经把可见公开面收紧到 503 decoy** + 高熵路径 + 密码 + TOTP + 90-day cookie + HttpOnly/Secure/Lax
+3. **6b 三项的边际收益** 是"假设 tailnet 已被攻陷"的额外屏障——到那个 step 后 CSRF/Origin 不是核心防御
+4. **6b 三项的实施风险**：CSRF gate POST 豁免写错会锁死登录；Origin 列错可能阻断其它 tailnet 设备首次接入；SameSite=Strict 在 push tap / new tab 场景可能边缘失效
+5. **OTel + Sentry hook（6c）** 单用户、单机场景下没必要——journal grep + structlog JSON 输出已经足够
+
+**周末 10 分钟可选小活**（不挂 roadmap）：如果未来想要 SameSite=Strict 防御深度，可以单行 commit + 实测 gate POST，跳过 CSRF/Origin。
+
+### 后续工作
+
+路线图结束。后续任何 auth 加固、可观察性升级、依赖更新等以独立 feature/fix branch 处理，不再走 phase 流程。
+
+下次开新窗口直接说要做什么即可。
 
 ---
 

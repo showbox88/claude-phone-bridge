@@ -54,9 +54,10 @@
 - **OTel hook 接入 Sentry** → 6c
 - 6b 每项 acceptance 段先讨论再动 auth 代码
 
-### 下一步
-👉 **Phase 6b**（auth 安全收尾，需用户每项二次确认）
-👉 **Phase 6c**（OTel + request_id）
+### 路线图收尾
+**Phase 6a 是重构路线图最后一个 phase。** 2026-06-10 经评估明确决定 **不做** Phase 6b（CSRF + SameSite Strict + Origin 校验）和 6c（OTel + request_id）——核心理由：Tailscale tailnet 已是 auth 边界 + 今日 super-link 模型把可见公开面收到 503 decoy + 单用户单机场景无需 OTel/Sentry hook。完整理由见 [refactor-roadmap.md "路线图收尾"](docs/superpowers/specs/2026-06-06-refactor-roadmap.md)。
+
+8 个阶段（-1 / 0 / 1 / 2 / 3 / 4 / 5 / 6a）全部 merge 到 main，整个 4 天的大重构告一段落。后续任何 auth 加固 / 性能调优 / 依赖更新走独立 `feature/*` 或 `fix/*` 分支即可。
 
 ---
 

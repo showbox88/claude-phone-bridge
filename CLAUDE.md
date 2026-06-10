@@ -12,31 +12,38 @@ TOTP form; passing it enrols the device (90-day sliding cookie). Manage/rotate
 the link over SSH: `.venv/bin/python -m app.auth.cli rotate-link`. See
 [docs/operations/superlink-runbook.md](docs/operations/superlink-runbook.md).
 
-## Refactor period rules (active 2026-06-06 onwards)
+## Refactor history (completed 2026-06-10)
 
-The repo is mid-refactor — see [docs/superpowers/specs/2026-06-06-refactor-roadmap.md](docs/superpowers/specs/2026-06-06-refactor-roadmap.md).
-Until the roadmap's §进度追踪表 shows all phases ✅:
+The 2026-06-06 → 2026-06-10 refactor roadmap is **done**. 8 phases merged
+to main covering: guardrails / foundation / PB client / app/ package split /
+session multi-instance / frontend ES modules / sync race fix + perf / tests
++ structlog. Phase 6b (CSRF / SameSite Strict / Origin) and 6c (OTel /
+request_id) were evaluated and explicitly skipped — see
+[docs/superpowers/specs/2026-06-06-refactor-roadmap.md](docs/superpowers/specs/2026-06-06-refactor-roadmap.md)
+"路线图收尾" section for the reasoning.
 
-- **`main` accepts only `refactor:` or `docs:` commits.** New features go on
-  `feature/*` branches and wait. If something is genuinely urgent, open a
-  `hotfix/*` branch and discuss before merging.
-- **Each refactor phase lives on its own branch:** `refactor/phase-N-<slug>`
-  (e.g. `refactor/phase-0-foundation`). Merge to `main` only after the
-  phase's准出闸门 in the roadmap are all ✅ and staging soak (24h or 48h
-  per the spec) is clean.
-- **Smoke tests are the canary.** Before merging any refactor branch:
+### Working rules going forward
 
-  ```bash
-  BASE=https://dashboard-server.tail4cfa2.ts.net \
-    BRIDGE_COOKIE='bridge_session=...' \
-    python tests/smoke_backend.py
-  ```
-
-  Must print `OK: all smoke checks passed`. If it doesn't, do NOT merge —
-  fix or revert.
+- **Branch naming:** new features on `feature/<slug>`, bug fixes on
+  `fix/<slug>`, hotfixes on `hotfix/<slug>`. Phase branches are retired.
+- **Commit prefixes** follow conventional commits: `feat:` / `fix:` /
+  `refactor:` / `docs:` / `chore:` / `test:` — no longer restricted to
+  `refactor:` / `docs:` only on main.
+- **Before merging to main:**
+  - Run `pytest tests/ --ignore=tests/test_safe_filename.py` — must be all green
+  - Run smoke if the change touches backend routes/WS:
+    ```bash
+    BASE=https://dashboard-server.tail4cfa2.ts.net \
+      BRIDGE_COOKIE='bridge_session=...' \
+      python tests/smoke_backend.py
+    ```
+    Must print `OK: all smoke checks passed`
+- **Auth code is data-safety critical** — `app/auth/*`, `auth.py`, the
+  super-link gate flow, the 503 decoy, and the 90-day cookie. Any change
+  here needs explicit user discussion + manual gate POST verification
+  before merge.
 - **Rollback procedure:** [docs/operations/rollback.md](docs/operations/rollback.md).
-  Anyone touching `main` should have skimmed it. Drill verified 2026-06-06
-  (1m18s end-to-end).
+  Anyone touching `main` should have skimmed it.
 
 ## Deploy
 
