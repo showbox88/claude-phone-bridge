@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import hashlib as _hashlib
-import logging
 import urllib.parse
 from pathlib import Path
 
@@ -13,10 +12,11 @@ from fastapi import APIRouter, HTTPException
 from app.integrations.pb import PBError
 
 from app.io_utils import read_json_safe, write_json_atomic
+from app.log import get_logger
 from app.paths import DATA_DIR
 from app.settings import settings
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 router = APIRouter()
 
 

@@ -7,12 +7,12 @@ an in-flight turn. Destroy disconnects the SDK client cleanly.
 from __future__ import annotations
 
 import contextlib
-import logging
 from pathlib import Path
 
 from app.agent.agent import ClaudeAgent
+from app.log import get_logger
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 
 class SessionManager:

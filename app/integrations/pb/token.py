@@ -10,12 +10,12 @@ mirror only happens when refresh_token_into_env is explicitly called.
 """
 from __future__ import annotations
 
-import logging
 import os
 
 from app.integrations.pb.client import PBClient
+from app.log import get_logger
 
-log = logging.getLogger("app.pb.token")
+log = get_logger("app.pb.token")
 
 
 def refresh_token_into_env(pb: PBClient) -> None:

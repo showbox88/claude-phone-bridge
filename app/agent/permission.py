@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import secrets
 
 from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
@@ -24,11 +23,12 @@ from claude_agent_sdk.types import PermissionResultAllow, PermissionResultDeny
 import push
 
 from app.agent.agent import current_agent
+from app.log import bind_cb, get_logger
 from app.settings import settings
 from app.state import state
 from app.ws.broadcast import broadcast, broadcast_to_agent
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 # Tools that auto-approve in CODE mode. Everything else hits the permission callback.
 AUTO_ALLOW = {
@@ -79,6 +79,7 @@ async def can_use_tool(tool_name: str, tool_input: dict, context):  # noqa: ARG0
         return PermissionResultAllow(behavior="allow", updated_input=None)
 
     cb_id = secrets.token_urlsafe(8)
+    bind_cb(cb_id)
     fut: asyncio.Future = asyncio.get_running_loop().create_future()
     state.pending[cb_id] = fut
     state.pending_meta[cb_id] = {

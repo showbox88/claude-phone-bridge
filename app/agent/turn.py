@@ -20,7 +20,6 @@ bookkeeping.
 from __future__ import annotations
 
 import asyncio
-import logging
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -35,9 +34,10 @@ import db
 from app.agent.agent import current_agent
 from app.agent.content import _build_user_content
 from app.agent.permission import truncate
+from app.log import bind_session, get_logger
 from app.ws.broadcast import broadcast_to_agent
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 
 def _save_msg(agent, role: str, content: dict) -> None:
@@ -80,6 +80,7 @@ async def run_user_turn(
     images = images or []
     files = files or []
     current_agent.set(agent)
+    bind_session(agent.session_id)
     async with agent.turn_lock:
         if agent.client is None:
             await broadcast_to_agent(agent,

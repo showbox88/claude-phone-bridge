@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import math
 
 from fastapi import APIRouter, HTTPException
 
+from app.log import get_logger
 from app.settings import settings
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 router = APIRouter()
 
 

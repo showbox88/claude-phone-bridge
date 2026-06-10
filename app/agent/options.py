@@ -14,7 +14,6 @@ keeps working with PB tools disabled.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions
@@ -22,8 +21,9 @@ from claude_agent_sdk import ClaudeAgentOptions
 import pb_tools
 
 from app.agent.permission import AUTO_ALLOW, CHAT_TOOLS, can_use_tool
+from app.log import get_logger
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 CHAT_SYSTEM_PROMPT = (
     "You are Claude, a helpful AI assistant. The user is chatting casually. "

@@ -40,16 +40,19 @@
 | 3 Session 多实例 | ✅ 已合并 | `refactor/phase-3-session-manager` | 2026-06-08 | `cf9664c` | CHANGELOG §Phase 3 |
 | 4 前端 | ✅ 已合并 | `refactor/phase-4-frontend-modules` | 2026-06-09 | `1709d46` | CHANGELOG §Phase 4 |
 | 5 sync | ✅ 已合并 | `refactor/phase-5-sync-runner` | 2026-06-09 | `5166a8f` | CHANGELOG §Phase 5 |
-| 6 收尾 | ⏳ 待开始 | `refactor/phase-6-polish` | — | — | — |
+| 6a 测试 + structlog | ✅ 已合并 | `refactor/phase-6a-tests-structlog` | 2026-06-10 | `<6a-merge-SHA>` | CHANGELOG §Phase 6a |
+| 6b auth 安全 | ⏳ 待开始 | `refactor/phase-6b-auth-hardening` | — | — | — |
+| 6c OTel + req_id | ⏳ 待开始 | `refactor/phase-6c-observability` | — | — | — |
 
 **状态图例**：⏳ 待开始 · 🚧 进行中 · ⏸ 暂停 · ✅ 已合并 · ❌ 回滚
 
 ### 下一步入口
 
-👉 **下一步执行**：Phase 6 · 收尾（测试补齐 + structlog + contextvars / CSRF + cookie SameSite / Origin 校验 / 文档清理）
+👉 **下一步执行**：Phase 6b · auth 安全收尾（CSRF 双提交 / cookie SameSite=Strict / Origin 校验）—— 每项 acceptance 先讨论再动 auth 代码
 
-Phase 5 已 merge 到 main（`5166a8f`），E2E 5 天对话仿真用真实数据验证 race fix + 同步全路径，0 错误。
-下次开新窗口直接说"继续重构路线图"或贴这一行即可。
+Phase 6a 已 merge（`<6a-SHA>`，243/243 测试，JSON 日志接通）。
+6b 需注意：今日 super-link 模型（commits `af00f8f..20e3215`）是数据安全要害，必须保持原样。
+下次开新窗口直接说"继续重构路线图，从 Phase 6b 开始"或贴这一行即可。
 
 ---
 

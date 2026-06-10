@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -35,15 +34,14 @@ import push
 import report
 
 from app.integrations.pb import PBClient, PBError, refresh_token_into_env
+from app.log import configure as configure_logging, get_logger
 from app.paths import BRIDGE_ROOT
 from app.persistence.files import uploads_dir
 from app.settings import settings
 from app.state import state
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 # ============================================================================
 # PocketBase token bootstrap. PB_TOKEN/PB_URL are mirrored into os.environ
@@ -99,6 +97,7 @@ from app.reporting.weekly_report import _weekly_report_posted  # noqa: E402
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # noqa: ARG001
+    configure_logging()
     # Resolve cwd_root from settings before anything else touches it.
     # app/state.py uses Path.cwd().resolve() as the dataclass default to
     # avoid importing app.settings at module-load time; lifespan corrects it.
