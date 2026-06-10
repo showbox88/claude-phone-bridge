@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import logging
 import shutil
 from typing import Any
 
@@ -22,11 +21,12 @@ from app.agent.manager import manager
 from app.agent.options import AVAILABLE_MODELS
 from app.agent.turn import run_user_turn
 from app.auth.state import auth_state
+from app.log import get_logger
 from app.persistence.files import _resolve_in_root, _to_rel, uploads_dir
 from app.state import state
 from app.ws.broadcast import broadcast, broadcast_to_agent
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 router = APIRouter()
 
 

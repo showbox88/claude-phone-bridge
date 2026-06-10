@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,9 +15,10 @@ from notion_sync.notion_api import NotionClient
 from notion_sync.pb_api import PBClient
 from notion_sync.provisioner import provision_notion_db
 
+from app.log import get_logger
 from app.paths import BRIDGE_ROOT
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 router = APIRouter()
 
 _SYSTEM_PB_COLLECTIONS = {

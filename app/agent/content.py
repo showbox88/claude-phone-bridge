@@ -14,10 +14,10 @@ the text block (capped per-sheet via MAX_SHEET_ROWS_PER_SHEET).
 from __future__ import annotations
 
 import base64
-import logging
 import mimetypes
 from pathlib import Path
 
+from app.log import get_logger
 from app.persistence.files import (
     MAX_IMAGES_PER_MESSAGE,
     MAX_SHEET_ROWS_PER_SHEET,
@@ -26,7 +26,7 @@ from app.persistence.files import (
     uploads_dir,
 )
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 
 def _read_text_safe(path: Path) -> str:

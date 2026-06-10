@@ -8,13 +8,13 @@ on their phone.
 from __future__ import annotations
 
 import asyncio
-import logging
 
 import push
 
+from app.log import get_logger
 from app.ws.broadcast import broadcast
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 
 async def _weekly_report_posted(sid: str, label: str) -> None:

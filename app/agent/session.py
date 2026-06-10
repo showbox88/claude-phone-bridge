@@ -6,14 +6,13 @@ lifespan) don't have to change import paths. All real work delegates to
 """
 from __future__ import annotations
 
-import logging
-
 import db
 
 from app.agent.manager import manager
+from app.log import get_logger
 from app.state import state
 
-log = logging.getLogger("bridge")
+log = get_logger("bridge")
 
 
 async def open_session(sid: str):

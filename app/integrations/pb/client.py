@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import random
 import socket
 import time
@@ -30,8 +29,9 @@ from app.integrations.pb.exceptions import (
     PBHTTPError,
     PBNetworkError,
 )
+from app.log import get_logger
 
-log = logging.getLogger("app.pb.client")
+log = get_logger("app.pb.client")
 
 _AUTH_PATH = "/api/collections/_superusers/auth-with-password"
 _RETRY_AFTER_CAP_SECS = 30.0
