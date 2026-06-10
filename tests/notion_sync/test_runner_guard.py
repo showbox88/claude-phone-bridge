@@ -1,6 +1,6 @@
 """should_run_now tests — pure function with no I/O."""
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -85,3 +85,48 @@ def test_paused_overrides_both_hours():
            "sync_hour_local_2": 15, "paused": True}
     assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 7))  is False
     assert should_run_now(cfg, now_utc=_utc(2026, 6, 1, 19)) is False
+
+
+def test_should_run_now_false_within_23h_of_last_run():
+    """Same-hour double-run within 23h should be blocked (e.g. quick
+    service restart that lands within the same sync_hour_local window)."""
+    now = datetime(2026, 6, 9, 9, 30, tzinfo=timezone.utc)
+    last = (now - timedelta(hours=2)).isoformat()
+    cfg = {"sync_hour_local": 9, "timezone": "UTC",
+           "last_successful_run_at": last}
+    assert should_run_now(cfg, now_utc=now) is False
+
+
+def test_should_run_now_true_after_23h_gap():
+    """After a full day, the gate releases and the runner runs again."""
+    now = datetime(2026, 6, 9, 9, 30, tzinfo=timezone.utc)
+    last = (now - timedelta(hours=24)).isoformat()
+    cfg = {"sync_hour_local": 9, "timezone": "UTC",
+           "last_successful_run_at": last}
+    assert should_run_now(cfg, now_utc=now) is True
+
+
+def test_should_run_now_true_no_last_run_recorded():
+    """First-ever run: no last_successful_run_at → run if hour matches."""
+    now = datetime(2026, 6, 9, 9, 30, tzinfo=timezone.utc)
+    cfg = {"sync_hour_local": 9, "timezone": "UTC"}
+    assert should_run_now(cfg, now_utc=now) is True
+
+
+def test_should_run_now_true_with_malformed_last_run():
+    """Malformed last_successful_run_at is treated as 'no last run' so
+    the gate doesn't permanently brick sync if PB writes a bad value."""
+    now = datetime(2026, 6, 9, 9, 30, tzinfo=timezone.utc)
+    cfg = {"sync_hour_local": 9, "timezone": "UTC",
+           "last_successful_run_at": "not-a-date"}
+    assert should_run_now(cfg, now_utc=now) is True
+
+
+def test_should_run_now_handles_trailing_z_iso_format():
+    """PB serializes datetimes as 'YYYY-MM-DD HH:MM:SS.sssZ' — parser
+    must accept that."""
+    now = datetime(2026, 6, 9, 9, 30, tzinfo=timezone.utc)
+    cfg = {"sync_hour_local": 9, "timezone": "UTC",
+           "last_successful_run_at": "2026-06-09T07:30:00.000Z"}
+    # 2h ago — gate should block.
+    assert should_run_now(cfg, now_utc=now) is False

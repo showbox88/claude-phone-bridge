@@ -50,19 +50,79 @@ def relation_target_collections(pb: PBClient, collection: str) -> dict[str, str]
     return out
 
 
+class LazyRelationLookup:
+    """Memoized per-target `{pb_id: notion_id}` index.
+
+    Replaces eager `build_relation_lookup`. First `.get(target)` /
+    `lookup[target]` triggers a PB `list_records` for that target;
+    subsequent calls return the cached dict. Collections that never
+    reference relations incur zero PB fetches.
+
+    Phase 5 Task 9: cuts cold-start PB calls at sync_collection from
+    N (every enabled target) to just the relation targets actually
+    referenced by the source collection being synced.
+
+    Contract matches the legacy dict: `lookup.get(target, default)` returns
+    `default` (typically `{}`) when the target either errors during fetch
+    or isn't a known collection — same silent-skip behaviour the eager
+    version had via `try/except continue`.
+    """
+
+    def __init__(self, pb: PBClient):
+        self._pb = pb
+        self._cache: dict[str, dict[str, str]] = {}
+        self._failed: set[str] = set()
+
+    def _load(self, target: str) -> dict[str, str] | None:
+        if target in self._cache:
+            return self._cache[target]
+        if target in self._failed:
+            return None
+        try:
+            rows = self._pb.list_records(target, sort="")
+        except Exception:
+            self._failed.add(target)
+            return None
+        idx = {r["id"]: r["notion_id"] for r in rows if r.get("notion_id")}
+        self._cache[target] = idx
+        return idx
+
+    def get(self, target: str, default=None):
+        """Dict-style: return `{pb_id: notion_id}` for `target`, or `default`
+        if the target cannot be fetched. Caches successful fetches and
+        remembers failures so retries don't re-hit PB.
+        """
+        idx = self._load(target)
+        return idx if idx is not None else default
+
+    def __getitem__(self, target: str) -> dict[str, str]:
+        idx = self._load(target)
+        if idx is None:
+            raise KeyError(target)
+        return idx
+
+    def __contains__(self, target: str) -> bool:
+        return self._load(target) is not None
+
+
 def build_relation_lookup(pb: PBClient, collections: list[str]) -> dict[str, dict[str, str]]:
-    """Build `{collection: {pb_id: notion_id}}` by reading the pipeline notion_id.
+    """Eager-fetch `{collection: {pb_id: notion_id}}` for all `collections`.
+
+    Kept as a thin back-compat wrapper around `LazyRelationLookup` for
+    callers (e.g. `scripts/reconcile_initial.py`, `scripts/backfill_relations.py`)
+    that want a plain dict up front. The runtime sync path uses
+    `LazyRelationLookup` directly (Phase 5 Task 9).
 
     Only rows whose `notion_id` is non-empty are included — rows not yet
-    synced to Notion can't be translated.
+    synced to Notion can't be translated. Collections that error during
+    fetch are silently skipped (absent from the returned dict).
     """
+    lazy = LazyRelationLookup(pb)
     out: dict[str, dict[str, str]] = {}
     for c in collections:
-        try:
-            rows = pb.list_records(c, sort="")
-        except Exception:
-            continue
-        out[c] = {r["id"]: r["notion_id"] for r in rows if r.get("notion_id")}
+        idx = lazy.get(c)
+        if idx is not None:
+            out[c] = idx
     return out
 
 
