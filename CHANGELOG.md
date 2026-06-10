@@ -5,6 +5,61 @@
 
 ---
 
+## 2026-06-10 — Phase 6a · 测试补齐 + structlog 统一日志
+
+**Branch:** `refactor/phase-6a-tests-structlog` (9 commits, `51e5af3..46d0b71`)
+**实际工时:** 约 2.5 小时（含 plan、subagent-driven 8 tasks）
+
+### 落地的事
+- **5 个新单元测试文件 (~38 cases)**:
+  - `tests/test_auth_middleware.py` (8) — 今日 super-link 中间件 4 paths read-only 覆盖
+  - `tests/test_db_crud.py` (11) — session/message/turn/settings CRUD on tmp sqlite
+  - `tests/test_build_user_content.py` (8) — xlsx/text/image 上传解析
+  - `tests/test_can_use_tool.py` (7) — permission gate 4 paths
+  - `tests/test_run_user_turn.py` (4) — turn pipeline via FakeClient
+- **`app/log.py` + structlog 接入**: 14 个模块从 stdlib logging 切到 structlog BoundLogger，每条日志 JSON 化 + contextvars 注入 `session_id` (turn 边界) + `cb_id` (permission gate). 加 `PositionalArgumentsFormatter` 让 `log.info("text %s", x)` 直接在 event 里插值
+- **不动今日 super-link 模型**: `app/auth/*` + `auth.py` 全程 read-only
+- **不动 sync event log**: `notion_sync/logger.py` (Phase 5 的 RotatingFileHandler) 保留
+
+### 闸门
+- ✅ 243/243 pytest 全过
+- ✅ `tests/smoke_backend.py` 5/5
+- ✅ systemd journal 输出 JSON-per-line + session_id/cb_id 可 grep
+- ✅ deploy health check 1-attempt pass
+- ✅ 今日 super-link 行为完全未变
+
+### 偏离计划 / Subagent 主动纠正
+1. **Plan 多处假设错误，subagent 现场纠正**：
+   - `usage_summary()` 真实形态是 `{total, today, month, by_model, by_day}` 全局聚合，不是 plan 想的 `{sessions: [...]}` per-session
+   - `_build_user_content` 空输入返回 `[{type: "text", text: "(no text)"}]` 不是 `[]`
+   - `.log` 后缀其实在 TEXT_EXTS 内 — 改用 `.xyz` 测 skip 路径
+   - `_build_user_content` 验证 `uploads_dir()` 路径范围，测试需 monkeypatch `state.cwd_root`
+   - SDK 的 `ResultMessage` 要 `subtype/duration_api_ms/is_error`、`AssistantMessage` 要 `model` — FakeClient queue helpers 自动补齐
+2. **pip-tools 重 compile 跨平台漂移**：VM 端 compile 删了 Windows-only `pywin32` + 加了 Linux-only `uvloop`。新 lockfile 对 prod (Linux) 严格正确，但丢了原本 commit `a4994f9` 的 "在 Windows 编译并手动加回 marker" NOTE
+3. **`test_settings.py::test_defaults` VM 上失败**：本地已是新值 90（来自今日 super-link commit `0d3ddea`），但 VM `tests/` 不在 deploy 范围内所以是旧文件断言 30。scp tests 后绿
+4. **structlog positional_args 默认不插值**：`log.info("text %s", x)` 默认存 `positional_args: [x]` + event 保留 `%s`。加 `PositionalArgumentsFormatter` 后渲染干净
+
+### 量化
+- 新增测试: 5 个文件
+- 新增 `app/log.py`: 76 行
+- 迁移模块: 14 个 `logging.getLogger("bridge")` → `get_logger("bridge")`
+- 加 dep: `structlog==25.5.0`
+- 总测试数: 243
+
+### 不在 Phase 6a 的（明确推到 6b/6c）
+- **CSRF 双提交 token 中间件** → 6b（gate 豁免设计影响 super-link POST 流）
+- **cookie SameSite=Strict** → 6b（要实测 gate POST 在 Strict 下仍能登录）
+- **Origin 校验中间件** → 6b（枚举允许 origin 集合 + WS handshake 处理）
+- **`request_id` 自动注入** → 6b/6c
+- **OTel hook 接入 Sentry** → 6c
+- 6b 每项 acceptance 段先讨论再动 auth 代码
+
+### 下一步
+👉 **Phase 6b**（auth 安全收尾，需用户每项二次确认）
+👉 **Phase 6c**（OTel + request_id）
+
+---
+
 ## 2026-06-09 — Phase 5 · `notion_sync/runner.py` 拆解 + race fix + 算法升级
 
 **Branch:** `refactor/phase-5-sync-runner` (14 commits, `07e1545..a4faf04`)
