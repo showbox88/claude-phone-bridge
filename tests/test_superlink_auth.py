@@ -48,3 +48,35 @@ def test_view_helpers_importable_from_views():
     html = _page("T", "<p>x</p>")
     assert html.status_code == 200
     assert _html_escape("<a>") == "&lt;a&gt;"
+
+
+import asyncio
+from starlette.requests import Request
+
+
+def _post_request(path, form_bytes, ip="1.2.3.4"):
+    """Minimal ASGI scope for a POST with urlencoded form body."""
+    scope = {
+        "type": "http", "method": "POST", "path": path, "raw_path": path.encode(),
+        "headers": [(b"content-type", b"application/x-www-form-urlencoded"),
+                    (b"user-agent", b"pytest")],
+        "query_string": b"", "client": (ip, 0), "scheme": "https", "server": ("h", 443),
+    }
+    sent = {"done": False}
+    async def receive():
+        if sent["done"]:
+            return {"type": "http.disconnect"}
+        sent["done"] = True
+        return {"type": "http.request", "body": form_bytes, "more_body": False}
+    return Request(scope, receive)
+
+
+def test_gate_post_rejects_bad_credentials(tmp_path, monkeypatch):
+    import app.auth.gate as gate
+    st = _fresh_state(tmp_path)
+    monkeypatch.setattr(gate, "auth_state", st)
+    req = _post_request("/" + st.set_super_link(),
+                        b"password=wrong&code=000000&device_name=x")
+    resp = asyncio.run(gate.superlink_gate(req))
+    assert resp.status_code == 401
+    assert not st.list_devices()  # no device enrolled on failure
