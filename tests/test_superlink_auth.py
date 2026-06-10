@@ -41,3 +41,10 @@ def test_super_link_persisted_as_hash_not_plaintext(tmp_path):
     raw = (tmp_path / ".bridge_auth.json").read_text(encoding="utf-8")
     assert token not in raw          # plaintext never on disk
     assert "super_link_hash" in raw  # only the hash
+
+
+def test_view_helpers_importable_from_views():
+    from app.auth.views import _page, _AUTH_PAGE_CSS, _ua_short, _html_escape
+    html = _page("T", "<p>x</p>")
+    assert html.status_code == 200
+    assert _html_escape("<a>") == "&lt;a&gt;"
