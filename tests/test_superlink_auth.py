@@ -80,3 +80,67 @@ def test_gate_post_rejects_bad_credentials(tmp_path, monkeypatch):
     resp = asyncio.run(gate.superlink_gate(req))
     assert resp.status_code == 401
     assert not st.list_devices()  # no device enrolled on failure
+
+
+import pyotp
+from fastapi.testclient import TestClient
+
+
+def _app_with_state(tmp_path, monkeypatch):
+    """Build the real app but point every auth_state reference at a tmp file."""
+    st = _fresh_state(tmp_path)
+    import app.auth.state as state_mod
+    import app.auth.middleware as mw
+    import app.auth.gate as gate
+    import app.auth.pages as pages
+    monkeypatch.setattr(state_mod, "auth_state", st, raising=False)
+    monkeypatch.setattr(mw, "auth_state", st, raising=False)
+    monkeypatch.setattr(gate, "auth_state", st, raising=False)
+    monkeypatch.setattr(pages, "auth_state", st, raising=False)
+    import app.main as main
+    return main.app, st
+
+
+def test_no_cookie_root_returns_decoy_503(tmp_path, monkeypatch):
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    client = TestClient(app, follow_redirects=False)
+    r = client.get("/")
+    assert r.status_code == 503
+    assert "nginx" in r.text
+    assert "Phone Bridge" not in r.text   # no identity leak
+
+
+def test_old_login_path_is_decoy(tmp_path, monkeypatch):
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    client = TestClient(app, follow_redirects=False)
+    assert client.get("/login").status_code == 503
+    assert client.get("/setup").status_code == 503
+
+
+def test_super_link_get_renders_gate(tmp_path, monkeypatch):
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    secret = st.set_super_link()
+    client = TestClient(app, follow_redirects=False)
+    r = client.get(f"/{secret}")
+    assert r.status_code == 200
+    assert "Sign in" in r.text
+
+
+def test_super_link_post_enrolls_device(tmp_path, monkeypatch):
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    secret = st.set_super_link()
+    code = pyotp.TOTP(st.totp_secret()).now()
+    client = TestClient(app, follow_redirects=False)
+    r = client.post(f"/{secret}", data={
+        "password": "correct horse battery staple",
+        "code": code, "device_name": "Test"})
+    assert r.status_code == 303
+    assert r.headers["location"] == "/"
+    assert auth_mod.COOKIE_NAME in r.headers.get("set-cookie", "")
+    assert len(st.list_devices()) == 1
+
+
+def test_health_stays_public(tmp_path, monkeypatch):
+    app, st = _app_with_state(tmp_path, monkeypatch)
+    client = TestClient(app, follow_redirects=False)
+    assert client.get("/api/health").status_code == 200
