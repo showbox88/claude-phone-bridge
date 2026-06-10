@@ -5,6 +5,68 @@
 
 ---
 
+## 2026-06-09 — Phase 5 · `notion_sync/runner.py` 拆解 + race fix + 算法升级
+
+**Branch:** `refactor/phase-5-sync-runner` (14 commits, `07e1545..a4faf04`)
+**实际工时:** 约 5 小时（含 plan、subagent-driven 14 个 task、E2E 真实对话验证）
+
+### 落地的事
+- **`notion_sync/runner.py` 895 行 → 33 行 thin shim** + 4 个聚焦模块（`bootstrap.py` 248 / `decisions.py` 187 / `dispatch.py` 405 / `post_phases.py` 163）+ `context.py` 52 行 SyncContext dataclass
+- **`Use Notion` decision race fix**（数据安全要害）：原代码 `nc.retrieve_page(notion_id)` → 读 last_edited → 写 PB，但 Notion 那边 `last_synced_at` 没动 → 下次 sync 看到 PB 的 last_synced_at 比 Notion 新 → 生成假冲突。修：先 PATCH Notion 的 last_synced_at → 读响应里的新 last_edited → 写 PB。两边同时间，下一圈 NoChange。TDD 4 测，race 测先红再绿
+- **`should_run_now` ≥23h gate**：原"hour 匹配即跑"在快速重启 / NTP 漂移下会重复跑或漏跑。加 `sync_global.last_successful_run_at`，需 "hour 匹配 AND 距上次成功 ≥23h"。subagent 还保留了原代码的 2-slot 支持（`sync_hour_local` + `sync_hour_local_2`），并加了 `any_collection_error` flag 让失败时不写 last_successful_run_at
+- **`_ACTION_ID_GETTERS` dict** 替代 8-branch isinstance 链；apply 用 `ACTION_HANDLERS = {Action class: apply_fn}` 字典分派
+- **`SyncContext` frozen dataclass** 打包 6+ kwargs（field_types / overrides / overrides_inv / title_field / notion_schema / relation_lookup / relation_targets）
+- **`LazyRelationLookup`** 替代 eager `build_relation_lookup` 10×10=100 次 `pb.list_all`：首次 `get(target)` 才拉 + 失败也缓存（`_failed` set）。`build_relation_lookup` 保留为 back-compat shim
+- **`frozen_pairs_for_all`**（在 `activity.py` 不是 `changeset.py`，subagent 纠正了 plan 错误）：一次性 group-by 查询替代 10 次单 collection 查
+- **`linkage.py` 走 `field_map_overrides`**：原硬编码 "Date" / "Day" / "Trip" / "Dates" Notion 列名 → 改成从 sync_config 反查
+- **`icons.py` 6 + N 模式**：6 个 legacy collection 保留 domain 映射；新 collection 通过 sync_config 新增的 `icon_field` / `icon_default` 列走声明路径
+- **`sync.log` RotatingFileHandler** 10MB × 5（之前是无限增长的 `open().write()`）
+- **`apply_error` 日志每条带 `pb_id` + `notion_id`**（用 `_action_ids` helper 自动提取）
+- **`notify_pending` 干净 import**：移除 `sys.path.insert(0, ...) + import db` hack
+- **归档 7 个已完成的 migration scripts** 到 `scripts/archive/` + README index
+- **新增测试 3 文件**：`test_context.py` (3) / `test_apply_decisions.py` (4) / `test_action_handlers.py` (13) = 20 新单元测试
+- **没删 `config.invalidate()`**：subagent 找到 3 个真实 caller (app/api/sync.py 用于 POST/PATCH/DELETE 后 cache-bust)。plan 的"dead API"假设错了
+
+### 闸门
+- ✅ 100/100 `tests/notion_sync/` 全过
+- ✅ 138/138 全套单元测试
+- ✅ `tests/smoke_backend.py` 5/5
+- ✅ `--force-now` 全 10 表 **27.4s → 22.6s**（带 52 行测试 workload，比 Task 0 baseline 还快——perf 优化在有负载时显出来）
+- ✅ 0 systemd errors / 0 sync.log apply_error / 0 traceback 全程
+- ✅ **E2E 真实对话验证**：5 天中文自然语言聊天，Claude 自主调用 64 次 `mcp__pb__*` 工具创建 52 行（trips 1 / days 5 / stops 15 / expenses 17 / foods 9 / journal 3 / locations 1 / todos 1），全部同步到 Notion，0 假冲突，所有 `Use Notion` + `Delete both` decisions 应用正确。Phase 5 race fix 实战验证
+
+### 偏离计划 / Subagent 主动纠正
+1. **Plan 多处假设错误，subagent 实地纠正**：
+   - `frozen_pairs_for_collection` 在 `activity.py` 不是 `changeset.py`
+   - `frozen_pairs` 真实过滤条件是 `decision=Pending AND op IN (Conflict, Delete?)`，不是 plan 写的 `applied_at is_empty=False`（data safety critical）
+   - `update_date_linkages` 真实 signature 接受 3 个 DB ID 不是 1 个
+   - `build_relation_lookup` 返回 `{coll: {pb_id: notion_id}}` 不是 plan 写的 `{coll: {pb_id: pb_row}}`
+   - `config.invalidate()` 不是 dead code（plan 让删；subagent 找到 3 caller 决定保留）
+2. **`should_run_now` 保留 2-slot 支持**：legacy 已支持 `sync_hour_local` + `sync_hour_local_2` 双时段
+3. **`icons.py` 不动 provisioner**：plan 让 provisioner 加 sync_config columns，但 provisioner 管的是 target collection 的 pipeline fields，sync_config 列由 PB admin 手动管。`cfg_row.get("icon_field")` 缺列返回 None → 走 legacy domain 映射，安全
+4. **跳过 48h staging soak**：与 Phase 0/1/2/3/4 一致 + E2E 真实对话已远超 soak 的验证强度
+
+### 量化
+- `runner.py`: 895 → 33 行 thin shim (-97%)
+- 新增 5 模块共 1055 行（context 52 + bootstrap 248 + decisions 187 + dispatch 405 + post_phases 163）
+- 新增测试: 20 case 跨 3 个新文件
+- 归档 scripts: 7 个
+- 性能: --force-now 满载 22.6s (<30s gate, 5s 改善)
+- 数据安全验证: 5 天 E2E 自然对话，52 行真实数据，0 假冲突
+
+### 修了哪些隐藏炸弹
+- **`Use Notion` 静默 race**：每次手动决议都会在下一圈伪造冲突（"我已经决定了为什么还问我"）
+- **`should_run_now` 跨小时漂移**：NTP 校正或快速重启会漏跑或重复跑
+- **`relation_lookup` 冷启动 100 次 list_all**：每次 sync 都白白拉 ~100 个 PB 调用
+- **`sync.log` 无上限增长**：长期运行可能炸盘
+- **`apply_error` 缺 ID**：日志后期 forensic 困难
+
+### 下一步
+👉 Phase 6 · 收尾（测试补齐 / structlog + contextvars / CSRF + cookie SameSite + Origin 校验 / 文档清理）
+新窗口续接指令："继续重构路线图，从 Phase 6 开始"
+
+---
+
 ## 2026-06-09 — Phase 4 · 前端模块化 + DOMPurify + 流式渲染 + CSS 拆分
 
 **Branch:** `refactor/phase-4-frontend-modules` (23 commits, `00ff28e..db53add`)
