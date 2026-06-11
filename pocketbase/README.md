@@ -12,7 +12,7 @@
 | 数据 | `/opt/pocketbase/pb_data/` |
 | Service | `pocketbase.service` (systemd, User=dev, listens 127.0.0.1:8090) |
 | 公网入口 | `https://dashboard-server.tail4cfa2.ts.net:8450/_/`（Tailscale Serve, tailnet only）|
-| Service account | `sdk@phone-bridge.local`（密码在 `/home/dev/phone-bridge/.env` 的 `POCKETBASE_ADMIN_PASSWORD`）|
+| Service account | `showbox88@gmail.com`（密码在 `/home/dev/phone-bridge/.env` 的 `POCKETBASE_ADMIN_PASSWORD`）|
 
 ## 复制部署的步骤（从零到能用）
 
@@ -37,7 +37,7 @@ sudo systemctl enable --now pocketbase
 sudo journalctl -u pocketbase --no-pager | grep pbinstall  # 取 install URL，浏览器开建 admin
 
 # 5. 创建专用 service account 给 SDK 用
-/opt/pocketbase/pocketbase superuser upsert sdk@phone-bridge.local '<strong-password>'
+/opt/pocketbase/pocketbase superuser upsert showbox88@gmail.com '<strong-password>'
 
 # 6. Tailscale Serve 暴露 admin UI 到 tailnet
 sudo tailscale serve --bg --https=8450 http://localhost:8090
