@@ -327,9 +327,17 @@ onRecordCreate((e) => {
 
 **实现时第一步必须验证**：在 implementation plan 里先读 `pocketbase/pb_data/types.d.ts` 确认 `onRecordCreate` / `$http.send` 在当前 PB 版本 (v0.38.2) 的精确签名，再落代码。
 
-#### Phone Bridge `/api/push` 端点
+#### Phone Bridge 新端点 `POST /api/push/send`
 
-复用现有实现 —— 当前 session 摘要显示已存在 `app/api/push.py`，按现有约定调用即可。如果该端点需要 auth header / 特定字段名，**implementation plan 第一步显式验证 payload schema 后再写 hook**。
+**Spec 修正（2026-06-11，写计划阶段发现）**：原以为 Phone Bridge 已有发送端点，实际 `app/api/push.py` 只暴露 `/api/subscribe` / `/api/unsubscribe` / `/api/vapid-public-key`，**没有发送触发端点**。`push.send_to_all(title, body, tag)` 是 Python 内部函数，需要新加 HTTP 入口。
+
+新端点设计：
+- 路径：`POST /api/push/send`
+- 添加到 `app/api/push.py`
+- **localhost 限定**：`if request.client.host != "127.0.0.1": raise HTTPException(403)`。Phone Bridge 监听在 `127.0.0.1:8001`（被 Tailscale Serve 反代到公网），但 PB 同机调用走 loopback，没人能从公网打到 `127.0.0.1` —— 不需要再加 token 认证，避免双方存秘密同步的麻烦
+- 不走 super-link auth 中间件（需要确认 auth middleware 是否对此路径放行；如不放行，在 `app/auth/middleware.py` 的允许列表里加 `/api/push/send`）
+- Body：`{"title": "...", "body": "...", "tag": "..."}`
+- 内部：`push.send_to_all(title, body, tag)` 调用 + 返回 `{"ok": True}`
 
 ## 4. 数据流总图
 
