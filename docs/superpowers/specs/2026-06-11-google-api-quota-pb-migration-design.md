@@ -364,8 +364,11 @@ Navbar useSystemAlerts() 每 30s tick     ────→  GET system_alerts (so
 ## 5. 部署 & 回滚
 
 ### 部署顺序
-1. **phone-bridge** 先 deploy：新 PB migration 创建 3 个 collection 并种子化；新 `pb_hooks/system_alerts.pb.js` 装上
-2. **Smart-Trip** 再 deploy：新 apiGuard.js + useSystemAlerts.js + Navbar/AdminPage 改动 → `npm run build:pb-vm` → scp dist
+
+> ⚠️ **顺序硬约束**：必须 phone-bridge 先、Smart-Trip 后。反过来部署会导致 Smart-Trip 向不存在的 PB collection 写入，apiGuard 全部走 fail-open 分支 → **闸门临时失效**，与本次修复的根本动机相反。
+
+1. **phone-bridge** 先 deploy：新 PB migration 创建 3 个 collection 并种子化；新 `pb_hooks/system_alerts.pb.js` 装上。**部署后立即用 PB admin UI 验证 3 个 collection 存在 + 5 行种子。**
+2. **Smart-Trip** 再 deploy（**phone-bridge 验证通过后**）：新 apiGuard.js + useSystemAlerts.js + Navbar/AdminPage 改动 → `npm run build:pb-vm` → scp dist
 3. 验证：
    - PB admin UI 看到 3 个新 collection + 5 行 system_settings 种子
    - Smart-Trip 加载后 Network 面板看 `system_alerts` 30s 一次 GET（poll 心跳）
@@ -395,6 +398,8 @@ Navbar useSystemAlerts() 每 30s tick     ────→  GET system_alerts (so
    - 别人偷到 key 也调不了
 
 这三步只要做一次，长效保险。
+
+> GCP 控制台 UI 路径以 2026-06 为准；Google 偶尔会调整菜单结构，未来若找不到对应位置直接在 GCP 顶部搜索框输 "Budgets"/"Quotas"/"Credentials" 即可定位。
 
 ## 7. 验证清单（implementation 后逐项打勾）
 
