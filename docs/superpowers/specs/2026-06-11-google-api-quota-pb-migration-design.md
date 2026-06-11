@@ -434,3 +434,30 @@ Navbar useSystemAlerts() 每 30s tick     ────→  GET system_alerts (so
 | 推送 hook 阻塞 PB 写入 | `$http.send` 设 5s timeout；hook 用 `onRecordAfterCreateRequest` 是 fire-and-forget |
 | 多 tab 并发把 alert 写重 | apiGuard 不去重；每次触发 = 一行 system_alerts。可接受（每分钟只可能触发几次）|
 | 种子值 INSERT OR IGNORE 后再改默认值需手动 | 文档化；migration 里只做 first-time seed，后续值修改通过 AdminPage |
+
+---
+
+## 部署记录（2026-06-11）
+
+实现按 [docs/superpowers/plans/2026-06-11-google-api-quota-pb-migration.md](../plans/2026-06-11-google-api-quota-pb-migration.md) 11 个任务通过 subagent-driven-development 完成并部署：
+
+**Phone-bridge 侧**（4 commits 已推 main）：
+- [`b48c170`](https://github.com/showbox88/claude-phone-bridge/commit/b48c170) `feat(push): POST /api/push/send 端点（loopback-only）` + 4 个 pytest 测试
+- [`30c4e7a`](https://github.com/showbox88/claude-phone-bridge/commit/30c4e7a) `feat(auth): allowlist /api/push/send`
+- [`9ecc1b3`](https://github.com/showbox88/claude-phone-bridge/commit/9ecc1b3) `feat(pb): migration 1781193600 创建 3 collection + 5 种子`
+- [`52e9b3e`](https://github.com/showbox88/claude-phone-bridge/commit/52e9b3e) `feat(pb): system_alerts hook → push fanout`
+
+**Smart-Trip 侧**（4 commits 已推 feature/pb-datasource，dist 已部署到 VM）：
+- [`67ca29c`](https://github.com/showbox88/Smart-Trip/commit/67ca29c) `refactor(apiGuard): Supabase → PocketBase`
+- [`7d93f05`](https://github.com/showbox88/Smart-Trip/commit/7d93f05) `feat(hooks): useSystemAlerts`
+- [`d3cb009`](https://github.com/showbox88/Smart-Trip/commit/d3cb009) `feat(navbar): wire bell to system_alerts dropdown`
+- [`e5a25e8`](https://github.com/showbox88/Smart-Trip/commit/e5a25e8) `feat(admin): port API monitoring section to PB + add alert banner`
+
+**端到端验证（人造触发）**：PB 手工 INSERT `system_alerts {api_type: places_search, reason: 2min_limit, count: 21}` → 30 秒内 Navbar 铃铛红点+数字 1 + AdminPage 顶部红横幅都显现 → markAck 走通。**通过。**
+
+### 已知后续工作（不阻碍上线）
+
+1. **VAPID_PRIVATE_KEY 未配置** —— phone-bridge `/api/push/send` 收到 alert 时 log `VAPID_PRIVATE_KEY not set, skipping push`，手机推送链路（4 通道中第 4 个）当前不工作。配 VAPID 后无需任何代码改动即可启用。
+2. **GCP Console Bedrock 三件套**（§6）—— Billing budget alert / per-API quota override / API key referrer restriction，需手动登 GCP 控制台配置。
+3. **VM 上 dist.bak.1781203674** —— 7 天后稳定运行可清理（`ssh dashboard-server "rm -rf /home/dev/smat-trip/dist.bak.*"`）。
+
