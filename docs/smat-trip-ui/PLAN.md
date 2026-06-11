@@ -154,10 +154,11 @@
 - [ ] 连续 3 天无冲突堆积后视为稳定
 - **回滚**：从 field_map_overrides 删掉映射即可，PB 数据不受影响
 
-### Phase 6 — 启用登录 ✅ 已上线（2026-06-10）
+### Phase 6 — 启用登录 ✅ 已上线（2026-06-10）+ 口令网关 ✅ 已验收
 - [x] `VITE_PB_LOGIN=on` 重新构建 + VM `.env` 把 `PB_INJECT_TOKEN` 切 off + 重启服务
-- [x] 验证：tailnet 无凭据访问 `/api/collections/trips/records` 返回 403（防护到位）；登录端点可达
-- [ ] 你在手机/电脑各登录一次（PB superuser 账号：`showbox88@gmail.com` + PB 管理员密码；token 写浏览器 localStorage，下次免输）
+- [x] 验证：tailnet 无凭据访问 `/api/collections/trips/records` 返回 403（防护到位）
+- [x] **口令网关**（用户偏好：不想记 Vaultwarden 那个随机长密码）：UI 只输用户记得住的短口令 → `POST /auth/gate` → 代理 timing-safe 比对 `UI_PASSPHRASE`（存 `/home/dev/smat-trip/.env`，chmod 600，错口令 1s 延迟）→ 对了返回 PB superuser token + 记录 → 浏览器 `pb.authStore.save` 跑真 PB 认证。AuthForm 在 PB 模式下隐藏 email / Google / 注册 tab，只留口令框。**口令本身从未进入聊天历史**（用户在 SSH 终端 `read -rsp` 输入）
+- [x] 用户验收通过
 
 ### 后续展望（不在本计划内，已记录待启动）
 - **双向互通入口（UI ⇄ phone-bridge 融合）**：分三步走，做到哪步看体验
