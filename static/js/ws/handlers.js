@@ -38,6 +38,7 @@ import { hideTyping } from '../render/typing.js';
 import { scrollToBottom } from '../render/scroll.js';
 import { setHeader, setMode, setModel, setAutoApprove } from '../session/header.js';
 import { loadSessionList } from '../session/list.js';
+import { setResponding } from '../composer/input.js';
 
 function endStream() {
   const bubble = get('currentAssistantBubble');
@@ -79,6 +80,7 @@ const HANDLERS = {
   permission_resolved: (m) => markPermResolved(m.id, m.decision),
   turn_done: () => {
     endStream();
+    setResponding(false); // re-arm composer (button back to SEND)
     scrollToBottom(true);
     // Refresh drawer: server auto-titles new sessions from the first
     // user message during the first turn. Without this, the new title
@@ -86,7 +88,7 @@ const HANDLERS = {
     loadSessionList();
   },
   system: (m) => appendSystem(m.msg || ''),
-  error: (m) => appendError(m.msg || 'error'),
+  error: (m) => { setResponding(false); appendError(m.msg || 'error'); },
   pong: () => {},
   session_loaded: (m) => {
     if (m.session) {
