@@ -4,7 +4,7 @@
 // works through brief network blips. Cache-first for /static/* assets,
 // network-first for everything else (so API + WS aren't affected).
 
-const CACHE_VERSION = 'v49';
+const CACHE_VERSION = "v50";
 const CACHE_NAME = `phone-bridge-${CACHE_VERSION}`;
 
 const ASSETS = [
