@@ -26,6 +26,8 @@ import {
   clearAttachments, clearFiles,
 } from './attachments.js';
 import { autoresize, setResponding } from './input.js';
+import { appendUser } from '../render/message.js';
+import { scrollToBottom } from '../render/scroll.js';
 
 // Resolved once at module load — matches legacy IIFE initialization timing.
 const CLIENT_TZ = (() => {
@@ -55,6 +57,10 @@ export function sendCurrent() {
     const files = pendingFiles.slice();
     const ok = sendWs({ type: 'user_message', text, images, files, client_tz: CLIENT_TZ });
     if (!ok) return;
+    // Optimistic render: handlers.js's user_echo is a no-op (it expects us to
+    // do it here), so without this the user bubble never paints until reload.
+    appendUser(text, images, files);
+    scrollToBottom(true);
     clearAttachments();
     clearFiles();
     setResponding(true);  // optimistic; cleared by turn_done / error
@@ -113,6 +119,10 @@ export function sendCheckin(fields) {
   const block = buildCheckinBlock(fields);
   const ok = sendWs({ type: 'user_message', text: block, images: [], files: [], client_tz: CLIENT_TZ });
   if (!ok) return false;
+  // Same optimistic render as text send — without it the checkin bubble
+  // doesn't appear until a manual reload.
+  appendUser(block, [], []);
+  scrollToBottom(true);
   setResponding(true);
   return true;
 }
