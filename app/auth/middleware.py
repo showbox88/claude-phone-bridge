@@ -30,6 +30,11 @@ _PUBLIC_EXACT = {
     "/api/health",
     "/.well-known/oauth-protected-resource/mcp",
     "/.well-known/oauth-authorization-server/mcp",
+    # PB hooks on the same VM POST here to trigger pushes. The push.py
+    # endpoint enforces request.client.host in {127.0.0.1, ::1, localhost}
+    # so adding it to the allowlist does NOT expose it to the public —
+    # Tailscale Serve / nginx never proxies loopback-bound peers here.
+    "/api/push/send",
 }
 
 # Generic nginx-style 503 — misdirects scanners toward "backend is down",
